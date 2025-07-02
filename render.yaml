@@ -34,7 +34,7 @@ services:
     env: static
     buildCommand: cd frontend && npm install && npm run build && npm run export
     staticPublishPath: frontend/out
-    plan: starter
+    plan: free
     envVars:
       - key: NEXT_PUBLIC_API_URL
         value: https://api.motionmentor.co
