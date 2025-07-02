@@ -4,6 +4,7 @@ from google.oauth2 import id_token
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework import authentication, exceptions
+from .analytics import analytics
 
 User = get_user_model()
 
@@ -44,6 +45,22 @@ class GoogleTokenAuthentication(authentication.BaseAuthentication):
                     'profile_picture': profile_picture,
                 }
             )
+            
+            # Track user authentication
+            analytics.track_user_auth(
+                user_id=str(user.id),
+                email=email,
+                name=f"{first_name} {last_name}".strip(),
+                method='google'
+            )
+            
+            # Track new user registration if created
+            if created:
+                analytics.track_event('user_registered', str(user.id), {
+                    'email': email,
+                    'name': f"{first_name} {last_name}".strip(),
+                    'registration_method': 'google'
+                })
             
             # Update profile info if user exists but info changed
             if not created:

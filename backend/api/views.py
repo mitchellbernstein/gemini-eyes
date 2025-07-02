@@ -10,6 +10,7 @@ import json
 
 from .templates import ACTIVITY_TEMPLATES, get_template_by_id
 from .gemini_service import GeminiAnalysisService
+from .analytics import analytics
 
 User = get_user_model()
 
@@ -44,6 +45,15 @@ def get_user_limits(request):
     
     can_analyze, message = user.can_analyze()
     
+    # Track rate limit check if user is near limits
+    if not can_analyze:
+        analytics.track_rate_limit(
+            user_id=str(user.id),
+            limit_type='combined',
+            current_usage=max(user.analyses_today, user.analyses_this_hour),
+            limit=min(settings.RATE_LIMIT_ANALYSES_PER_DAY, settings.RATE_LIMIT_ANALYSES_PER_HOUR)
+        )
+    
     return Response({
         'can_analyze': can_analyze,
         'message': message,
@@ -66,10 +76,19 @@ def get_user_limits(request):
 def analyze_video(request):
     """Analyze video with AI feedback"""
     user = request.user
+    start_time = time.time()
     
     # Check rate limits (middleware already checked, but double-check)
     can_analyze, message = user.can_analyze()
     if not can_analyze:
+        # Track rate limit hits
+        analytics.track_rate_limit(
+            user_id=str(user.id),
+            limit_type='analysis_request',
+            current_usage=max(user.analyses_today, user.analyses_this_hour),
+            limit=min(settings.RATE_LIMIT_ANALYSES_PER_DAY, settings.RATE_LIMIT_ANALYSES_PER_HOUR)
+        )
+        
         return Response({
             'error': 'Rate limit exceeded',
             'message': message
@@ -121,13 +140,33 @@ def analyze_video(request):
         }, status=status.HTTP_400_BAD_REQUEST)
     
     try:
+        # Track analysis request
+        analytics.track_analysis_request(
+            user_id=str(user.id),
+            activity_type=analysis_type,
+            template_id=template_id,
+            video_size=video_file.size,
+            custom_prompt=bool(custom_prompt)
+        )
+        
         # Record analysis attempt (before processing to prevent retry abuse)
         user.record_analysis()
         
         # Analyze video
         analysis_result = gemini_service.analyze_activity(video_file, prompt)
         
+        processing_time = time.time() - start_time
+        
         if analysis_result['success']:
+            # Track successful analysis
+            analytics.track_analysis_completion(
+                user_id=str(user.id),
+                activity_type=analysis_type,
+                success=True,
+                processing_time=processing_time,
+                frames_analyzed=analysis_result.get('frames_analyzed', 0)
+            )
+            
             return Response({
                 'success': True,
                 'analysis': analysis_result['analysis'],
@@ -139,6 +178,15 @@ def analyze_video(request):
                 }
             })
         else:
+            # Track failed analysis
+            analytics.track_analysis_completion(
+                user_id=str(user.id),
+                activity_type=analysis_type,
+                success=False,
+                processing_time=processing_time,
+                error=analysis_result.get('error', 'Analysis failed')
+            )
+            
             # Analysis failed, but we already recorded the attempt
             # This prevents users from retrying failed analyses without counting against limits
             return Response({
@@ -148,6 +196,20 @@ def analyze_video(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
     except Exception as e:
+        processing_time = time.time() - start_time
+        
+        # Track exception
+        analytics.track_error(
+            error_type='analysis_exception',
+            error_message=str(e),
+            user_id=str(user.id),
+            context={
+                'activity_type': analysis_type if 'analysis_type' in locals() else 'unknown',
+                'processing_time': processing_time,
+                'video_size': video_file.size if 'video_file' in locals() else None
+            }
+        )
+        
         return Response({
             'success': False,
             'error': f'Analysis failed: {str(e)}',
