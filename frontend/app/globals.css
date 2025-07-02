@@ -61,6 +61,12 @@ body {
   pointer-events: none;
 }
 
+/* Allow pointer events on interactive elements */
+.video-overlay button,
+.video-overlay .interactive {
+  pointer-events: auto;
+}
+
 .recording-indicator {
   animation: pulse 1.5s ease-in-out infinite;
 }
