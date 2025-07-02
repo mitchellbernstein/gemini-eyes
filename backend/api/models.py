@@ -28,12 +28,8 @@ class User(AbstractUser):
     def reset_daily_count_if_needed(self):
         """Reset daily analysis count if it's a new day"""
         today = timezone.now().date()
-        # Convert daily_reset_date to date if it's datetime
-        reset_date = self.daily_reset_date
-        if hasattr(reset_date, 'date'):
-            reset_date = reset_date.date()
         
-        if reset_date < today:
+        if self.daily_reset_date < today:
             self.analyses_today = 0
             self.daily_reset_date = today
             self.save(update_fields=['analyses_today', 'daily_reset_date'])
