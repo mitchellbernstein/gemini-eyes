@@ -5,7 +5,7 @@ services:
     env: python
     buildCommand: cd backend && ./build.sh
     startCommand: cd backend && gunicorn gemini_eyes.wsgi:application
-    plan: starter
+    plan: standard
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.4
@@ -34,7 +34,7 @@ services:
     env: static
     buildCommand: cd frontend && npm install && npm run build && npm run export
     staticPublishPath: frontend/out
-    plan: starter
+    plan: free
     envVars:
       - key: NEXT_PUBLIC_API_URL
         value: https://api.motionmentor.co
@@ -45,4 +45,4 @@ databases:
   - name: motionmentor-db
     databaseName: motionmentor
     user: motionmentor_user
-    plan: starter 
+    plan: free 
