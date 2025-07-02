@@ -6,7 +6,7 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Gemini Eyes - AI Activity Analysis',
+  title: 'Motion Mentor - AI Activity Analysis',
   description: 'Get instant AI feedback on any activity - sports, fitness, cooking, and more',
   manifest: '/manifest.json',
   themeColor: '#3b82f6',
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'Gemini Eyes'
+    title: 'Motion Mentor'
   },
 }
 
@@ -44,7 +44,7 @@ export default function RootLayout({
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="Gemini Eyes" />
+        <meta name="apple-mobile-web-app-title" content="Motion Mentor" />
         <meta name="format-detection" content="telephone=no" />
         <meta name="msapplication-TileColor" content="#3b82f6" />
         <meta name="msapplication-tap-highlight" content="no" />

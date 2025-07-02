@@ -1,4 +1,4 @@
-# 🚀 Gemini Eyes Setup Instructions
+# 🚀 Motion Mentor Setup Instructions
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd gemini-eyes
+cd motion-mentor
 
 # Make setup script executable
 chmod +x run_app.sh

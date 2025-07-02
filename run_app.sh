@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Gemini Eyes - Development Setup Script
-echo "🚀 Starting Gemini Eyes Development Environment"
+# Motion Mentor - Development Setup Script
+echo "🚀 Starting Motion Mentor Development Environment"
 
 # Check if Python and Node are installed
 if ! command -v python3 &> /dev/null; then
@@ -82,7 +82,7 @@ NEXTJS_PID=$!
 
 # Show status
 echo ""
-echo "✅ Gemini Eyes is running!"
+echo "✅ Motion Mentor is running!"
 echo "🌐 Frontend: http://localhost:3000"
 echo "🔧 Backend API: http://localhost:8000"
 echo "⚙️  Admin Panel: http://localhost:8000/admin/"

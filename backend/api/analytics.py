@@ -1,5 +1,5 @@
 """
-OpenPanel Analytics Service for Gemini Eyes Backend
+OpenPanel Analytics Service for Motion Mentor Backend
 """
 
 import os
@@ -133,6 +133,14 @@ class AnalyticsService:
             **(context or {})
         }
         self.track_event('backend_error', user_id, properties)
+    
+    def track_coaching_feedback(self, user_id: str, activity_type: str, feedback_type: str, feedback_length: int):
+        """Track real-time coaching feedback"""
+        self.track_event('coaching_feedback', user_id, {
+            'activity_type': activity_type,
+            'feedback_type': feedback_type,
+            'feedback_length': feedback_length
+        })
 
 
 # Global analytics instance

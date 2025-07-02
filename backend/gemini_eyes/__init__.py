@@ -1,1 +1,1 @@
-# Gemini Eyes Django Project 
+# Motion Mentor Django Project 

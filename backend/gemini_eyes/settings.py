@@ -131,6 +131,9 @@ GOOGLE_CLIENT_SECRET = config('GOOGLE_CLIENT_SECRET')
 # Gemini API
 GEMINI_API_KEY = config('GEMINI_API_KEY')
 
+# ElevenLabs API for Text-to-Speech
+ELEVENLABS_API_KEY = config('ELEVENLABS_API_KEY', default='')
+
 # OpenPanel Analytics
 OPENPANEL_CLIENT_ID = config('OPENPANEL_CLIENT_ID', default='')
 OPENPANEL_SECRET_KEY = config('OPENPANEL_SECRET_KEY', default='')

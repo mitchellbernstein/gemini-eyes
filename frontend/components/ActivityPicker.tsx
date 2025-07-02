@@ -27,13 +27,41 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
   const op = useOpenPanel()
 
   useEffect(() => {
-    fetchTemplates()
-    fetchUserLimits()
+    // Only fetch if we have a valid token
+    const token = localStorage.getItem('google_token')
+    if (token) {
+      fetchTemplates()
+      fetchUserLimits()
+    } else {
+      // If no token, set loading to false to show the UI
+      setLoading(false)
+    }
   }, [])
+
+  // Also listen for auth changes in case token becomes available later
+  useEffect(() => {
+    const handleAuthSuccess = () => {
+      const token = localStorage.getItem('google_token')
+      if (token && templates.length === 0) {
+        setLoading(true)
+        fetchTemplates()
+        fetchUserLimits()
+      }
+    }
+    
+    window.addEventListener('auth-success', handleAuthSuccess)
+    return () => window.removeEventListener('auth-success', handleAuthSuccess)
+  }, [templates.length])
 
   const fetchTemplates = async () => {
     try {
       const token = localStorage.getItem('google_token')
+
+      if (!token) {
+        console.error('No token available for templates fetch')
+        return
+      }
+      
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/templates/`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -51,6 +79,11 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
             templates: data.templates.map((t: ActivityTemplate) => t.name)
           })
         }
+      } else if (response.status === 401) {
+        // Token expired - clear it and redirect to sign in
+        localStorage.removeItem('google_token')
+        localStorage.removeItem('user_info')
+        window.location.reload()
       }
     } catch (error) {
       console.error('Failed to fetch templates:', error)
@@ -69,6 +102,12 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
   const fetchUserLimits = async () => {
     try {
       const token = localStorage.getItem('google_token')
+
+      if (!token) {
+        console.error('No token available for user limits fetch')
+        return
+      }
+      
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/user/limits/`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -98,6 +137,11 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
             hourlyUsed: data.limits.hourly_used
           })
         }
+      } else if (response.status === 401) {
+        // Token expired - clear it and redirect to sign in
+        localStorage.removeItem('google_token')
+        localStorage.removeItem('user_info')
+        window.location.reload()
       }
     } catch (error) {
       console.error('Failed to fetch user limits:', error)

@@ -1,1 +1,1 @@
-# API app for Gemini Eyes 
+# API app for Motion Mentor 

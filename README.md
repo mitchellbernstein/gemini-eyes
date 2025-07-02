@@ -1,4 +1,4 @@
-# Gemini Eyes - AI Activity Analysis Platform
+# Motion Mentor - AI Activity Analysis Platform
 
 An ultra-simple web app that provides instant AI feedback on any activity using Google's Gemini Vision API. Built for both desktop and mobile with a mobile-first approach.
 

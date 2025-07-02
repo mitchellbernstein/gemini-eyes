@@ -6,5 +6,7 @@ urlpatterns = [
     path('templates/', views.get_templates, name='get_templates'),
     path('user/limits/', views.get_user_limits, name='get_user_limits'),
     path('analyze/', views.analyze_video, name='analyze_video'),
+    path('realtime-coaching/', views.realtime_coaching, name='realtime_coaching'),
+    path('speech/', views.generate_speech, name='generate_speech'),
     path('auth/verify/', views.verify_google_token, name='verify_google_token'),
 ] 

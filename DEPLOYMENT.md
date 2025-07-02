@@ -30,7 +30,7 @@ git push origin main
 ### **Option A: One-Click Deploy (Recommended)**
 1. Go to [Render Dashboard](https://dashboard.render.com/)
 2. Click **"New"** → **"Blueprint"**
-3. Connect your GitHub repository: `gemini-eyes`
+3. Connect your GitHub repository: `motion-mentor`
 4. Render will auto-detect `render.yaml` and create all services
 
 ### **Option B: Manual Setup**

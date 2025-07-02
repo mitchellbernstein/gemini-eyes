@@ -29,6 +29,17 @@ export interface AnalysisResult {
     hourly: number
   }
   error?: string
+  coaching_summary?: CoachingSummary
+}
+
+export interface CoachingSummary {
+  total_reps: number
+  average_form_score: number
+  best_rep_score: number
+  improvement_areas: string[]
+  strengths: string[]
+  session_duration: number
+  cues_given: number
 }
 
 export default function Home() {
@@ -36,6 +47,7 @@ export default function Home() {
   const [selectedTemplate, setSelectedTemplate] = useState<ActivityTemplate | null>(null)
   const [customPrompt, setCustomPrompt] = useState('')
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null)
+  const [coachingData, setCoachingData] = useState<any>(null)
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   
@@ -82,15 +94,18 @@ export default function Home() {
     }
   }
 
-  const handleVideoRecorded = (blob: Blob) => {
+  const handleVideoRecorded = (blob: Blob, coachingSession?: any) => {
     setVideoBlob(blob)
+    setCoachingData(coachingSession)
     setStep('results')
     
     if (op) {
       op.track('video_recorded', {
         activityName: selectedTemplate?.name || 'Custom Analysis',
         videoSize: blob.size,
-        templateId: selectedTemplate?.id
+        templateId: selectedTemplate?.id,
+        totalReps: coachingSession?.totalReps || 0,
+        averageFormScore: coachingSession?.averageFormScore || 0
       })
     }
   }
@@ -105,13 +120,24 @@ export default function Home() {
       op.track('analysis_started', {
         activityName: selectedTemplate?.name || 'Custom Analysis',
         templateId: selectedTemplate?.id,
-        videoSize: videoBlob.size
+        videoSize: videoBlob.size,
+        hasCoachingData: !!coachingData,
+        totalReps: coachingData?.totalReps || 0
       })
     }
 
     try {
       const formData = new FormData()
-      formData.append('video', videoBlob)
+      
+      // If we have coaching data, prioritize that over video analysis
+      if (coachingData) {
+        formData.append('coaching_data', JSON.stringify(coachingData))
+        // Still send video for backup/validation, but smaller
+        formData.append('video', videoBlob)
+      } else {
+        // Fallback to traditional video analysis
+        formData.append('video', videoBlob)
+      }
       
       if (selectedTemplate) {
         formData.append('template_id', selectedTemplate.id.toString())

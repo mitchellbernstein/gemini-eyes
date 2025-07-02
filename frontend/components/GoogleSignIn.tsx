@@ -84,7 +84,7 @@ export default function GoogleSignIn() {
           className="mb-8"
         >
           <div className="text-6xl mb-4">👁️</div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Gemini Eyes</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Motion Mentor</h1>
           <p className="text-gray-600">AI-Powered Activity Analysis</p>
         </motion.div>
 
