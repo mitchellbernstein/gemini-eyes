@@ -3,10 +3,10 @@ services:
   - type: web
     name: motionmentor-api
     env: python
-    build_command: |
+    buildCommand: |
       pip install -r backend/requirements.txt
       python backend/manage.py migrate
-    start_command: gunicorn gemini_eyes.wsgi:application --chdir backend
+    startCommand: gunicorn gemini_eyes.wsgi:application --chdir backend
     plan: standard
     envVars:
       - key: PYTHON_VERSION
@@ -34,13 +34,13 @@ services:
 
   # Next.js Frontend
   - type: web
-    name: motionmentor-frontend
+    name: motionmentor-app
     env: node
-    build_command: |
+    buildCommand: |
       cd frontend
       npm install
       npm run build
-    start_command: "npm run start -- --port $PORT"
+    startCommand: "npm start -- --port $PORT"
     plan: standard
     envVars:
       - key: NEXT_PUBLIC_API_URL
