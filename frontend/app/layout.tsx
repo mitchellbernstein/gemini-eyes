@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
+import { OpenPanelComponent } from '@openpanel/nextjs'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -50,6 +51,12 @@ export default function RootLayout({
       </head>
       <body className={`${inter.className} safe-area-inset`}>
         {children}
+        <OpenPanelComponent 
+          clientId={process.env.NEXT_PUBLIC_OPENPANEL_CLIENT_ID!}
+          trackScreenViews={true}
+          trackAttributes={true}
+          trackOutgoingLinks={true}
+        />
       </body>
     </html>
   )

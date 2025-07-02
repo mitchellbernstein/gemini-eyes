@@ -131,9 +131,15 @@ GOOGLE_CLIENT_SECRET = config('GOOGLE_CLIENT_SECRET')
 # Gemini API
 GEMINI_API_KEY = config('GEMINI_API_KEY')
 
-# Rate Limiting
-RATE_LIMIT_ANALYSES_PER_HOUR = 10
-RATE_LIMIT_ANALYSES_PER_DAY = 50
+# OpenPanel Analytics
+OPENPANEL_CLIENT_ID = config('OPENPANEL_CLIENT_ID', default='')
+OPENPANEL_SECRET_KEY = config('OPENPANEL_SECRET_KEY', default='')
+
+# Rate Limiting - Much more generous limits, configurable via environment
+RATE_LIMIT_ANALYSES_PER_HOUR = config('RATE_LIMIT_ANALYSES_PER_HOUR', default=1000, cast=int)  
+RATE_LIMIT_ANALYSES_PER_DAY = config('RATE_LIMIT_ANALYSES_PER_DAY', default=10000, cast=int)
+RATE_LIMITING_ENABLED = config('RATE_LIMITING_ENABLED', default=True, cast=bool)
+ANALYSIS_COOLDOWN_MINUTES = config('ANALYSIS_COOLDOWN_MINUTES', default=0, cast=int)  # No cooldown by default
 VIDEO_MAX_SIZE_MB = 10
 VIDEO_MAX_DURATION_SECONDS = 30
 

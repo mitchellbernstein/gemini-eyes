@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import { useOpenPanel } from '@openpanel/nextjs'
 import { ArrowRightIcon, PlusIcon } from '@heroicons/react/24/outline'
 import { ActivityTemplate } from '@/app/page'
 
@@ -23,6 +24,7 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
   const [showCustom, setShowCustom] = useState(false)
   const [userLimits, setUserLimits] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const op = useOpenPanel()
 
   useEffect(() => {
     fetchTemplates()
@@ -41,9 +43,24 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
       if (response.ok) {
         const data = await response.json()
         setTemplates(data.templates)
+        
+        // Track templates loaded
+        if (op) {
+          op.track('templates_loaded', {
+            templateCount: data.templates.length,
+            templates: data.templates.map((t: ActivityTemplate) => t.name)
+          })
+        }
       }
     } catch (error) {
       console.error('Failed to fetch templates:', error)
+      
+      // Track template loading error
+      if (op) {
+        op.track('templates_load_error', {
+          error: String(error)
+        })
+      }
     } finally {
       setLoading(false)
     }
@@ -61,6 +78,26 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
       if (response.ok) {
         const data = await response.json()
         setUserLimits(data)
+        
+        // Track user limits
+        if (op) {
+          op.track('user_limits_loaded', {
+            canAnalyze: data.can_analyze,
+            dailyUsed: data.limits.daily_used,
+            dailyLimit: data.limits.daily_limit,
+            hourlyUsed: data.limits.hourly_used,
+            hourlyLimit: data.limits.hourly_limit
+          })
+        }
+        
+        // Track if user is rate limited
+        if (!data.can_analyze && op) {
+          op.track('rate_limit_encountered', {
+            reason: data.message,
+            dailyUsed: data.limits.daily_used,
+            hourlyUsed: data.limits.hourly_used
+          })
+        }
       }
     } catch (error) {
       console.error('Failed to fetch user limits:', error)
@@ -68,12 +105,40 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
   }
 
   const handleTemplateClick = (template: ActivityTemplate) => {
+    // Track template selection
+    if (op) {
+      op.track('template_clicked', {
+        templateId: template.id,
+        templateName: template.name,
+        templateCategory: template.category
+      })
+    }
+    
     onActivitySelected(template)
   }
 
   const handleCustomSubmit = () => {
     if (customPrompt.trim().length >= 10) {
+      // Track custom prompt usage
+      if (op) {
+        op.track('custom_prompt_submitted', {
+          promptLength: customPrompt.length,
+          promptPreview: customPrompt.substring(0, 50) + '...'
+        })
+      }
+      
       onActivitySelected(null, customPrompt.trim())
+    }
+  }
+
+  const handleShowCustomToggle = () => {
+    setShowCustom(!showCustom)
+    
+    // Track custom prompt visibility toggle
+    if (op) {
+      op.track('custom_prompt_toggled', {
+        visible: !showCustom
+      })
     }
   }
 
@@ -147,7 +212,7 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
       >
         {!showCustom ? (
           <button
-            onClick={() => setShowCustom(true)}
+            onClick={handleShowCustomToggle}
             disabled={!userLimits?.can_analyze}
             className="w-full bg-white rounded-xl p-4 shadow-sm hover:shadow-md transition-all duration-200 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -183,10 +248,7 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
               </p>
               <div className="flex space-x-2">
                 <button
-                  onClick={() => {
-                    setShowCustom(false)
-                    setCustomPrompt('')
-                  }}
+                  onClick={handleShowCustomToggle}
                   className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
                 >
                   Cancel

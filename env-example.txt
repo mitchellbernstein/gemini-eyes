@@ -44,14 +44,20 @@ GEMINI_API_KEY=your-gemini-api-key-here
 # RATE LIMITING CONFIGURATION
 # =============================================================================
 
-# Maximum analyses per user per day
-RATE_LIMIT_PER_DAY=50
+# Enable/disable rate limiting entirely (True/False)
+RATE_LIMITING_ENABLED=True
 
-# Maximum analyses per user per hour  
-RATE_LIMIT_PER_HOUR=10
+# Maximum analyses per user per day (very generous defaults)
+RATE_LIMIT_ANALYSES_PER_DAY=10000
 
-# Cooldown period between requests (minutes)
-COOLDOWN_MINUTES=6
+# Maximum analyses per user per hour (very generous defaults)
+RATE_LIMIT_ANALYSES_PER_HOUR=1000
+
+# Cooldown period between requests in minutes (0 = no cooldown)
+ANALYSIS_COOLDOWN_MINUTES=0
+
+# To completely disable rate limiting for development:
+# RATE_LIMITING_ENABLED=False
 
 # =============================================================================
 # VIDEO PROCESSING LIMITS

@@ -13,6 +13,7 @@
     "@google-cloud/storage": "^7.6.0",
     "@headlessui/react": "^1.7.17",
     "@heroicons/react": "^2.0.18",
+    "@openpanel/nextjs": "^1.0.8",
     "autoprefixer": "^10.4.16",
     "axios": "^1.6.2",
     "framer-motion": "^10.16.16",

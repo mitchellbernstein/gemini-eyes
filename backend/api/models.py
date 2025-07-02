@@ -1,6 +1,7 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 from datetime import datetime, timedelta
 
 class User(AbstractUser):
@@ -47,20 +48,28 @@ class User(AbstractUser):
         if self.is_banned:
             return False, "Account is banned"
         
+        # Skip rate limiting if disabled
+        if not getattr(settings, 'RATE_LIMITING_ENABLED', True):
+            return True, "OK"
+        
         self.reset_daily_count_if_needed()
         self.reset_hourly_count_if_needed()
         
-        if self.analyses_today >= 50:
-            return False, "Daily limit of 50 analyses reached"
+        daily_limit = getattr(settings, 'RATE_LIMIT_ANALYSES_PER_DAY', 10000)
+        hourly_limit = getattr(settings, 'RATE_LIMIT_ANALYSES_PER_HOUR', 1000)
         
-        if self.analyses_this_hour >= 10:
-            return False, "Hourly limit of 10 analyses reached"
+        if self.analyses_today >= daily_limit:
+            return False, f"Daily limit of {daily_limit} analyses reached"
         
-        # Check minimum time between analyses (6 minutes)
-        if self.last_analysis:
+        if self.analyses_this_hour >= hourly_limit:
+            return False, f"Hourly limit of {hourly_limit} analyses reached"
+        
+        # Optional: Check minimum time between analyses (disabled by default now)
+        min_cooldown_minutes = getattr(settings, 'ANALYSIS_COOLDOWN_MINUTES', 0)
+        if min_cooldown_minutes > 0 and self.last_analysis:
             time_since_last = timezone.now() - self.last_analysis
-            if time_since_last < timedelta(minutes=6):
-                minutes_left = 6 - int(time_since_last.total_seconds() / 60)
+            if time_since_last < timedelta(minutes=min_cooldown_minutes):
+                minutes_left = min_cooldown_minutes - int(time_since_last.total_seconds() / 60)
                 return False, f"Please wait {minutes_left} more minutes"
         
         return True, "OK"

@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.contrib.auth import get_user_model
+from django.conf import settings
 import json
 
 from .templates import ACTIVITY_TEMPLATES, get_template_by_id
@@ -47,15 +48,16 @@ def get_user_limits(request):
         'can_analyze': can_analyze,
         'message': message,
         'limits': {
-            'daily_limit': 50,
-            'hourly_limit': 10,
+            'daily_limit': settings.RATE_LIMIT_ANALYSES_PER_DAY,
+            'hourly_limit': settings.RATE_LIMIT_ANALYSES_PER_HOUR,
             'daily_used': user.analyses_today,
             'hourly_used': user.analyses_this_hour,
-            'daily_remaining': max(0, 50 - user.analyses_today),
-            'hourly_remaining': max(0, 10 - user.analyses_this_hour),
+            'daily_remaining': max(0, settings.RATE_LIMIT_ANALYSES_PER_DAY - user.analyses_today),
+            'hourly_remaining': max(0, settings.RATE_LIMIT_ANALYSES_PER_HOUR - user.analyses_this_hour),
         },
         'last_analysis': user.last_analysis,
-        'account_status': 'active' if not user.is_banned else 'banned'
+        'account_status': 'active' if not user.is_banned else 'banned',
+        'rate_limiting_enabled': getattr(settings, 'RATE_LIMITING_ENABLED', True)
     })
 
 @api_view(['POST'])
@@ -132,8 +134,8 @@ def analyze_video(request):
                 'analysis_type': analysis_type,
                 'frames_analyzed': analysis_result.get('frames_analyzed', 0),
                 'remaining_analyses': {
-                    'daily': max(0, 50 - user.analyses_today),
-                    'hourly': max(0, 10 - user.analyses_this_hour)
+                    'daily': max(0, settings.RATE_LIMIT_ANALYSES_PER_DAY - user.analyses_today),
+                    'hourly': max(0, settings.RATE_LIMIT_ANALYSES_PER_HOUR - user.analyses_this_hour)
                 }
             })
         else:

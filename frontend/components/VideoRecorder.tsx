@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import { useOpenPanel } from '@openpanel/nextjs'
 import { 
   VideoCameraIcon, 
   StopIcon, 
@@ -21,6 +22,7 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user')
   const [error, setError] = useState<string | null>(null)
+  const op = useOpenPanel()
   
   const videoRef = useRef<HTMLVideoElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -29,6 +31,15 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
 
   useEffect(() => {
     startCamera()
+    
+    // Track video recorder loaded
+    if (op) {
+      op.track('video_recorder_loaded', {
+        activityName: activityName,
+        facingMode: facingMode
+      })
+    }
+    
     return () => {
       stopCamera()
     }
@@ -50,9 +61,26 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
         videoRef.current.srcObject = mediaStream
       }
       setError(null)
+      
+      // Track camera access success
+      if (op) {
+        op.track('camera_access_granted', {
+          facingMode: facingMode,
+          activityName: activityName
+        })
+      }
     } catch (err) {
       console.error('Camera access failed:', err)
       setError('Camera access denied. Please allow camera permissions and try again.')
+      
+      // Track camera access failure
+      if (op) {
+        op.track('camera_access_denied', {
+          error: String(err),
+          facingMode: facingMode,
+          activityName: activityName
+        })
+      }
     }
   }
 
@@ -81,6 +109,17 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
 
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'video/webm' })
+        
+        // Track recording completed
+        if (op) {
+          op.track('recording_completed', {
+            activityName: activityName,
+            duration: 30 - timeRemaining,
+            videoSize: blob.size,
+            facingMode: facingMode
+          })
+        }
+        
         onVideoRecorded(blob)
       }
 
@@ -88,6 +127,14 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
       mediaRecorderRef.current = mediaRecorder
       setIsRecording(true)
       setTimeRemaining(30)
+
+      // Track recording started
+      if (op) {
+        op.track('recording_started', {
+          activityName: activityName,
+          facingMode: facingMode
+        })
+      }
 
       // Start countdown timer
       timerRef.current = setInterval(() => {
@@ -103,8 +150,16 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
     } catch (err) {
       console.error('Recording failed:', err)
       setError('Recording failed. Please try again.')
+      
+      // Track recording error
+      if (op) {
+        op.track('recording_error', {
+          error: String(err),
+          activityName: activityName
+        })
+      }
     }
-  }, [stream, onVideoRecorded])
+  }, [stream, onVideoRecorded, timeRemaining, op, activityName, facingMode])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
@@ -115,11 +170,41 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
         clearInterval(timerRef.current)
         timerRef.current = null
       }
+      
+      // Track manual recording stop
+      if (op) {
+        op.track('recording_stopped_manually', {
+          activityName: activityName,
+          timeRemaining: timeRemaining
+        })
+      }
     }
-  }, [isRecording])
+  }, [isRecording, op, activityName, timeRemaining])
 
   const toggleCamera = () => {
-    setFacingMode(facingMode === 'user' ? 'environment' : 'user')
+    const newFacingMode = facingMode === 'user' ? 'environment' : 'user'
+    setFacingMode(newFacingMode)
+    
+    // Track camera toggle
+    if (op) {
+      op.track('camera_toggled', {
+        fromMode: facingMode,
+        toMode: newFacingMode,
+        activityName: activityName
+      })
+    }
+  }
+
+  const handleBack = () => {
+    // Track back navigation
+    if (op) {
+      op.track('video_recorder_back', {
+        activityName: activityName,
+        wasRecording: isRecording
+      })
+    }
+    
+    onBack()
   }
 
   if (error) {
@@ -131,7 +216,7 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
           <p className="text-sm text-gray-600 mb-4">{error}</p>
           <div className="flex space-x-3">
             <button
-              onClick={onBack}
+              onClick={handleBack}
               className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
             >
               Go Back
@@ -165,7 +250,7 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
         <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent">
           <div className="flex items-center justify-between text-white">
             <button
-              onClick={onBack}
+              onClick={handleBack}
               className="p-2 hover:bg-white/20 rounded-full transition-colors"
             >
               <ArrowLeftIcon className="w-6 h-6" />
