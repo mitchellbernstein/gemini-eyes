@@ -3,8 +3,10 @@ services:
   - type: web
     name: motionmentor-api
     env: python
-    buildCommand: cd backend && ./build.sh
-    startCommand: cd backend && gunicorn gemini_eyes.wsgi:application
+    build_command: |
+      pip install -r backend/requirements.txt
+      python backend/manage.py migrate
+    start_command: gunicorn gemini_eyes.wsgi:application --chdir backend
     plan: standard
     envVars:
       - key: PYTHON_VERSION
@@ -14,31 +16,44 @@ services:
       - key: DEBUG
         value: False
       - key: ALLOWED_HOSTS
-        value: motionmentor-api.onrender.com,api.motionmentor.co
+        value: "motionmentor.onrender.com,localhost"
       - key: FRONTEND_URL
-        value: https://motionmentor.co
+        value: https://motionmentor.onrender.com
       - key: DATABASE_URL
         fromDatabase:
           name: motionmentor-db
           property: connectionString
       - key: GOOGLE_CLIENT_ID
-        sync: false  # Set manually in Render dashboard
+        sync: false
       - key: GOOGLE_CLIENT_SECRET
-        sync: false  # Set manually in Render dashboard
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
       - key: GEMINI_API_KEY
-        sync: false  # Set manually in Render dashboard
+        sync: false
 
   # Next.js Frontend
   - type: web
     name: motionmentor-frontend
-    env: static
-    buildCommand: cd frontend && npm install && npm run build && npm run export
-    staticPublishPath: frontend/out
+    env: node
+    build_command: |
+      cd frontend
+      npm install
+      npm run build
+    start_command: "npm run start -- --port $PORT"
+    plan: standard
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: https://api.motionmentor.co
+        fromService:
+          name: motionmentor-api
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
-        sync: false  # Set manually in Render dashboard
+        sync: false
+    build:
+      cache:
+        - path: "frontend/node_modules"
+        - path: "frontend/.next/cache"
 
 databases:
   - name: motionmentor-db

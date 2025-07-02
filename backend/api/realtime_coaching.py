@@ -91,15 +91,20 @@ class RealtimeCoachingService:
         """Get or create user coaching state"""
         if user_id not in self.user_states:
             self.user_states[user_id] = {
-                'phase': 'setup',  # setup, monitoring, post_rep
+                'phase': 'setup',
                 'rep_count': 0,
-                'last_feedback': None,
+                'last_feedback_time': None,
                 'movement_detected': False,
-                # Add squat-specific state tracking
-                'squat_state': 'standing',  # standing, descending, bottom, ascending
+                'squat_state': 'standing',
                 'last_squat_position': None,
-                'squat_depth_threshold': 0.08,  # Minimum depth for valid squat
-                'position_history': []  # Track recent positions for movement detection
+                'squat_depth_threshold': 0.08,
+                'position_history': [],
+                'jumping_jack_state': {'phase': 'down'},
+                'last_api_call_time': 0,
+                # Add frame buffer and batching state
+                'frame_buffer': [], # Stores (frame_data, pose_data) for batch analysis
+                'last_batch_time': 0,
+                'reps_since_last_batch': 0
             }
         return self.user_states[user_id]
     
@@ -110,21 +115,31 @@ class RealtimeCoachingService:
             
         landmarks = pose_data['landmarks']
         
+        # Debug logging to see what activity we're detecting
+        logger.info(f"🔍 Movement detection called for activity: '{activity_type}' with {len(landmarks)} landmarks")
+        
         try:
             if activity_type.lower().find('squat') != -1:
+                logger.info("🏋️ Using squat detection")
                 return self._detect_squat_completion(landmarks)
             elif activity_type.lower().find('pushup') != -1 or activity_type.lower().find('push-up') != -1:
+                logger.info("💪 Using pushup detection")
                 return self._detect_pushup_completion(landmarks)
             elif activity_type.lower().find('jumping jack') != -1:
+                logger.info("🤸 Using jumping jack detection")
                 return self._detect_jumping_jack_completion(landmarks)
             elif activity_type.lower().find('basketball') != -1:
+                logger.info("🏀 Using basketball detection")
                 return self._detect_basketball_shot_completion(landmarks)
             elif activity_type.lower().find('tennis') != -1 or activity_type.lower().find('golf') != -1:
+                logger.info("🎾 Using swing detection")
                 return self._detect_swing_completion(landmarks)
             elif activity_type.lower().find('plank') != -1:
+                logger.info("🏃 Using plank detection")
                 return self._detect_plank_hold_completion(landmarks)
             else:
                 # Generic movement detection
+                logger.info(f"❓ Using generic detection for unknown activity: '{activity_type}'")
                 return self._detect_generic_movement_completion(landmarks)
                         
         except (KeyError, IndexError, TypeError) as e:
@@ -227,6 +242,19 @@ class RealtimeCoachingService:
             logger.error(f"Error in squat detection: {e}")
             return False
 
+    def _simple_squat_feedback(self, depth: float) -> str:
+        """Generate heuristic squat feedback if AI fails (no generic fluff)"""
+        depth_cm = round(abs(depth) * 100, 1)
+        if depth < -0.15:
+            depth_comment = f"Great depth (~{depth_cm}cm below knees)."
+        elif depth < -0.08:
+            depth_comment = f"Solid depth (~{depth_cm}cm). Aim a bit lower for full range."
+        else:
+            depth_comment = f"Depth was shallow (~{depth_cm}cm). Squat deeper next rep."
+
+        torso_comment = "Keep chest upright" if depth < -0.08 else "Engage core to avoid leaning forward"
+        return f"{depth_comment} {torso_comment}."
+
     def _detect_pushup_completion(self, landmarks: List[Dict]) -> bool:
         """Detect pushup completion using shoulder and wrist positions"""
         if len(landmarks) < 16:
@@ -251,37 +279,72 @@ class RealtimeCoachingService:
             return False
 
     def _detect_jumping_jack_completion(self, landmarks: List[Dict]) -> bool:
-        """Detect jumping jack completion using arm and leg positions"""
-        if len(landmarks) < 20:
+        """Detect jumping-jack rep completion with a simple two-phase state machine.
+
+        Phase definitions (mirrors the frontend `detectJumpingJackCompletion`):
+        1. DOWN  – starting/ending pose: arms down, legs together
+        2. UP    – mid-jack pose: arms overhead, legs wide
+
+        A rep is counted when the athlete transitions **UP → DOWN** (i.e. returns to the
+        starting pose after having reached the fully stretched position).
+        """
+
+        if len(landmarks) < 30:
             return False
-            
+
         try:
-            # Check arm position (wrists relative to shoulders)
-            left_shoulder = landmarks[11]
-            right_shoulder = landmarks[12]
-            left_wrist = landmarks[15]
-            right_wrist = landmarks[16]
-            
-            # Check leg position (ankles relative to hips)
-            left_hip = landmarks[23]
-            right_hip = landmarks[24]
-            left_ankle = landmarks[27] if len(landmarks) > 27 else None
-            right_ankle = landmarks[28] if len(landmarks) > 28 else None
-            
-            if not (left_ankle and right_ankle):
+            # -------- Landmark extraction --------
+            ls, rs = landmarks[11], landmarks[12]   # shoulders
+            lw, rw = landmarks[15], landmarks[16]   # wrists
+            lh, rh = landmarks[23], landmarks[24]   # hips
+            la = landmarks[27] if len(landmarks) > 27 else None  # ankles
+            ra = landmarks[28] if len(landmarks) > 28 else None
+
+            if not (la and ra):
                 return False
-            
-            # Arms up and legs together = completion of jack
-            arms_up = (left_wrist.get('y', 0) < left_shoulder.get('y', 0) and 
-                      right_wrist.get('y', 0) < right_shoulder.get('y', 0))
-            
-            hip_distance = abs(left_hip.get('x', 0) - right_hip.get('x', 0))
-            ankle_distance = abs(left_ankle.get('x', 0) - right_ankle.get('x', 0))
-            
-            legs_together = ankle_distance <= hip_distance * 1.2  # Ankles close to hip width
-            
-            return arms_up and legs_together
-            
+
+            # -------- Pose features --------
+            # Arms are up if both wrists are above corresponding shoulders (lower y == higher)
+            arms_up = (lw.get('y', 1) < ls.get('y', 1)) and (rw.get('y', 1) < rs.get('y', 1))
+
+            # Legs wide if ankle separation clearly exceeds shoulder width
+            shoulder_dist = abs(ls.get('x', 0) - rs.get('x', 0))
+            ankle_dist = abs(la.get('x', 0) - ra.get('x', 0))
+            legs_wide = ankle_dist > shoulder_dist * 1.5
+
+            # Legs together if ankles roughly under hips (allow small variance)
+            legs_together = ankle_dist < shoulder_dist * 1.2
+
+            arms_down = not arms_up
+
+            # -------- Simple state machine --------
+            if not hasattr(self, '_jj_detection_state'):
+                # Store last phase so we only count once per rep
+                self._jj_detection_state = {
+                    'phase': 'down'  # initial expected phase when session starts
+                }
+
+            state = self._jj_detection_state
+
+            # Debug log (prints are OK for dev server)
+            print(f"JJ detect | phase={state['phase']} arms_up={arms_up} legs_wide={legs_wide} legs_together={legs_together}")
+            logger.info(f"🤸 JJ State: phase={state['phase']} | arms_up={arms_up} legs_wide={legs_wide} legs_together={legs_together}")
+
+            if state['phase'] == 'down' and arms_up and legs_wide:
+                # Transition: start jumping up
+                state['phase'] = 'up'
+                logger.info("🔼 JJ: Transitioned to UP phase")
+                return False
+
+            if state['phase'] == 'up' and arms_down and legs_together:
+                # Completed the jack (returned to starting pose)
+                state['phase'] = 'down'
+                print("🎯 Jumping Jack COMPLETED! ✅")
+                logger.info("🎯 Jumping Jack COMPLETED! ✅")
+                return True
+
+            return False
+
         except (KeyError, TypeError):
             return False
 
@@ -561,238 +624,78 @@ class RealtimeCoachingService:
     
     async def analyze_live_frame(self, frame_data: str, activity_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze a live frame for real-time coaching feedback - WITH PROPER REP DETECTION
+        Analyze a live frame for real-time coaching, using batching to reduce API calls.
         """
-        try:
-            user_id = context.get('user_id', 'anonymous')
-            pose_data = context.get('pose_data', {})
+        user_id = context.get('user_id', 'anonymous')
+        pose_data = context.get('pose_data', {})
+        current_time = context.get('timestamp', int(time.time() * 1000))
+        user_state = self.get_user_state(user_id)
+
+        # Always add the current frame to the buffer
+        if frame_data:
+            user_state['frame_buffer'].append(frame_data)
+        
+        # Trim buffer to keep it from growing too large (e.g., last 100 frames)
+        if len(user_state['frame_buffer']) > 100:
+            user_state['frame_buffer'].pop(0)
+
+        movement_completed = self.detect_movement_completion(pose_data, activity_type)
+        response_data = {
+            'success': True,
+            'movement_completed': False,
+            'should_provide_feedback': False,
+            'feedback': None
+        }
+
+        if movement_completed:
+            user_state['rep_count'] += 1
+            user_state['reps_since_last_batch'] += 1
+            response_data.update({
+                'movement_completed': True,
+                'rep_count': user_state['rep_count']
+            })
+
+            # --- Batching Logic ---
+            # Condition 1: Rep-based trigger (e.g., every 5 reps)
+            rep_trigger = user_state['reps_since_last_batch'] >= 5
+            # Condition 2: Time-based trigger (e.g., every 7 seconds)
+            time_trigger = (current_time - user_state.get('last_batch_time', 0)) > 7000
             
-            # Check if we should provide coaching for this user/activity
-            if not self.should_provide_coaching(user_id, activity_type):
-                return {
-                    'success': False,
-                    'message': 'Coaching rate limited'
-                }
-            
-            user_state = self.get_user_state(user_id)
-            current_time = context.get('timestamp', int(time.time() * 1000))
-            
-            # CRITICAL: Check for actual movement completion first
-            movement_completed = False
-            landmarks = pose_data.get('landmarks', [])
-            
-            if landmarks and len(landmarks) > 0:
-                movement_completed = self.detect_movement_completion(pose_data, activity_type)
-                logger.info(f"Movement detection for {activity_type}: {'COMPLETED' if movement_completed else 'ongoing'}")
-            
-            # State management: intro -> monitoring -> feedback -> monitoring...
-            coaching_phase = user_state.get('coaching_phase', 'intro')
-            last_coaching_time = user_state.get('last_coaching_time', 0)
-            current_rep_count = user_state.get('reps_completed', 0)
-            
-            # If movement was completed, increment rep count and provide rep-specific feedback
-            if movement_completed:
-                current_rep_count += 1
-                user_state['reps_completed'] = current_rep_count
-                user_state['coaching_phase'] = 'feedback'
-                user_state['last_coaching_time'] = current_time
-                logger.info(f"REP COMPLETED! Count: {current_rep_count}")
+            # If either trigger is met and we have frames, process the batch
+            if (rep_trigger or time_trigger) and user_state['frame_buffer']:
+                logger.info(f"✅ Batch trigger met for user {user_id}: {user_state['reps_since_last_batch']} reps, {(current_time - user_state.get('last_batch_time', 0)) / 1000}s elapsed.")
                 
-                # Generate AI feedback for the completed rep
-                rep_feedback_prompt = f"""
-                You are an expert fitness coach providing feedback after a completed {activity_type}.
+                # Use a subset of frames to avoid sending too much data (e.g., 5 frames)
+                frames_for_analysis = user_state['frame_buffer'][-5:]
                 
-                The user just finished rep #{current_rep_count}.
-                
-                Provide specific, encouraging feedback about this rep and quick tip for the next one.
-                Keep it brief (10-15 words) since this is live voice coaching.
-                
-                Focus on form improvement, not generic encouragement.
-                Examples: "Good depth on rep {current_rep_count}! Keep knees behind toes for rep {current_rep_count + 1}."
-                """
+                prompt = self.get_activity_prompt(activity_type, user_state['rep_count'], 'rep_group_analysis')
                 
                 try:
-                    ai_feedback = await self.gemini_service.analyze_video_frame(
-                        frame_data or "", 
-                        rep_feedback_prompt
-                    )
+                    feedback = await self.gemini_service.analyze_video_frames(frames_for_analysis, prompt)
                     
-                    if ai_feedback:
-                        return {
-                            'success': True,
-                            'feedback': ai_feedback,
-                            'type': 'rep_completed',
-                            'activity': activity_type,
-                            'rep_count': current_rep_count,
-                            'movement_completed': True,
-                            'should_provide_feedback': True
-                        }
+                    response_data.update({
+                        'should_provide_feedback': True,
+                        'feedback': feedback,
+                        'feedback_type': 'batch_analysis'
+                    })
+                    logger.info(f"🧠 AI batch feedback generated for {activity_type}")
+
                 except Exception as e:
-                    logger.error(f"Error generating rep feedback: {e}")
-                    # Fallback to simple rep acknowledgment
-                    return {
-                        'success': True,
-                        'feedback': f"Rep {current_rep_count} complete! Keep going!",
-                        'type': 'rep_completed',
-                        'activity': activity_type,
-                        'rep_count': current_rep_count,
-                        'movement_completed': True,
-                        'should_provide_feedback': True
-                    }
-            
-            # If this is the first interaction, generate AI intro message
-            if coaching_phase == 'intro':
-                # Generate AI intro instead of pre-written
-                intro_prompt = f"""
-                You are an expert fitness coach starting a live coaching session for {activity_type}.
-                
-                Provide a brief (10-15 words), encouraging introduction to get them started.
-                Focus on what they should concentrate on first.
-                Be motivating and professional.
-                
-                Example style: "Let's perfect your technique! Focus on [specific form element] as we begin."
-                """
-                
-                try:
-                    ai_intro = await self.gemini_service.analyze_video_frame(
-                        frame_data or "Starting session", 
-                        intro_prompt
-                    )
-                    
-                    if ai_intro:
-                        # Mark as given intro, switch to monitoring phase
-                        user_state['coaching_phase'] = 'monitoring'
-                        user_state['last_intro_time'] = current_time
-                        user_state['last_coaching_time'] = current_time  # Set timing to prevent immediate next feedback
-                        
-                        return {
-                            'success': True,
-                            'feedback': ai_intro,
-                            'type': 'ai_intro',
-                            'activity': activity_type,
-                            'rep_count': current_rep_count,
-                            'movement_completed': False,
-                            'should_provide_feedback': True
-                        }
-                except Exception as e:
-                    logger.error(f"Error generating AI intro: {e}")
-                    # Skip intro if AI fails, go straight to monitoring
-                    user_state['coaching_phase'] = 'monitoring'
-                    user_state['last_coaching_time'] = current_time
-                    
-                    return {
-                        'success': False,
-                        'message': 'AI intro failed, proceeding to monitoring',
-                        'rep_count': current_rep_count,
-                        'movement_completed': False,
-                        'should_provide_feedback': False
-                    }
-            
-            # Monitoring phase: provide real-time AI analysis based on activity type
-            elif coaching_phase == 'monitoring':
-                time_since_last = current_time - last_coaching_time
-                
-                # Get activity-specific feedback strategy
-                feedback_strategy = self.get_activity_feedback_strategy(activity_type)
-                min_interval = self.get_coaching_interval(activity_type) * 1000  # Convert to ms
-                
-                # For activities like squats, don't give constant feedback - wait for reps
-                if activity_type.lower() in ['squat', 'squat form check', 'pushup', 'push-up technique']:
-                    return {
-                        'success': True,
-                        'message': f'Monitoring {activity_type} form - {current_rep_count} reps completed',
-                        'rep_count': current_rep_count,
-                        'movement_completed': False,
-                        'should_provide_feedback': False
-                    }
-                
-                if time_since_last < min_interval:
-                    return {
-                        'success': False,
-                        'message': f'Monitoring form - next feedback in {(min_interval - time_since_last) / 1000:.1f}s',
-                        'rep_count': current_rep_count,
-                        'movement_completed': False,
-                        'should_provide_feedback': False
-                    }
-                
-                # ONLY generate AI feedback for continuous activities (plank, jumping jacks)
-                try:
-                    # Create coaching prompt based on activity and strategy
-                    coaching_prompt = self.get_live_coaching_prompt(activity_type, feedback_strategy, user_state)
-                    
-                    # Use Gemini for real analysis instead of pre-written feedback
-                    full_prompt = f"""
-                    {coaching_prompt}
-                    
-                    Frame data: {frame_data}
-                    Current timestamp: {current_time}
-                    User rep count: {current_rep_count}
-                    
-                    CRITICAL: Provide ONLY original AI-generated feedback based on what you see.
-                    Do NOT use generic phrases like "maintain good posture" or "remember to breathe".
-                    Be specific about what you observe in THIS moment.
-                    """
-                    
-                    # Get AI analysis - this is the ONLY source of feedback
-                    feedback_response = await self.gemini_service.analyze_video_frame(
-                        frame_data, 
-                        full_prompt
-                    )
-                    
-                    if feedback_response and len(feedback_response.strip()) > 0:
-                        # Update state
-                        user_state['last_feedback'] = feedback_response
-                        user_state['last_coaching_time'] = current_time
-                        
-                        return {
-                            'success': True,
-                            'feedback': feedback_response,
-                            'type': 'ai_analysis',
-                            'activity': activity_type,
-                            'rep_count': current_rep_count,
-                            'movement_completed': False,
-                            'should_provide_feedback': True,
-                            'strategy': feedback_strategy
-                        }
-                    else:
-                        # If AI fails completely, return no feedback rather than fallback text
-                        logger.warning(f"AI feedback empty or failed for {activity_type}")
-                        return {
-                            'success': False,
-                            'message': 'AI analysis returned no feedback',
-                            'rep_count': current_rep_count,
-                            'movement_completed': False,
-                            'should_provide_feedback': False
-                        }
-                        
-                except Exception as e:
-                    logger.error(f"Error getting AI coaching feedback: {e}")
-                    return {
-                        'success': False,
-                        'error': f'AI analysis failed: {str(e)}',
-                        'rep_count': current_rep_count,
-                        'movement_completed': False,
-                        'should_provide_feedback': False
-                    }
-            
-            # Default fallback
-            return {
-                'success': False,
-                'message': 'No coaching needed at this time',
-                'rep_count': current_rep_count,
-                'movement_completed': False,
-                'should_provide_feedback': False
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in live frame analysis: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'rep_count': 0,
-                'movement_completed': False,
-                'should_provide_feedback': False
-            }
+                    logger.error(f"Error during batched Gemini analysis: {e}")
+                    # Use heuristic fallback if AI fails
+                    feedback = self._simple_jumping_jack_feedback(user_state['rep_count'])
+                    response_data.update({
+                        'should_provide_feedback': True,
+                        'feedback': feedback,
+                        'feedback_type': 'heuristic_fallback'
+                    })
+
+                # Reset batch state
+                user_state['frame_buffer'] = []
+                user_state['reps_since_last_batch'] = 0
+                user_state['last_batch_time'] = current_time
+
+        return response_data
 
     def analyze_complete_rep(self, activity_type: str, rep_data: Dict[str, Any], user_context: Dict[str, Any]) -> str:
         """
@@ -1026,3 +929,41 @@ class RealtimeCoachingService:
             
             Provide helpful coaching feedback based on what you observe.
             """
+
+    def _simple_jumping_jack_feedback(self, rep_count: int) -> str:
+        """Generate heuristic jumping jack feedback if AI fails (no generic fluff)"""
+        feedback_options = [
+            f"Rep {rep_count} completed! Keep your arms straight overhead.",
+            f"Good jack #{rep_count}! Land softer on your feet next time.",
+            f"Rep {rep_count} done! Sync your arm and leg movements better.",
+            f"Jack #{rep_count} complete! Jump higher and spread legs wider.",
+            f"Rep {rep_count} finished! Keep your core tight throughout."
+        ]
+        return feedback_options[(rep_count - 1) % len(feedback_options)]
+
+    def get_activity_prompt(self, activity_type: str, rep_count: int, prompt_type: str) -> str:
+        """Get a specific prompt for the activity and context."""
+        
+        base_prompt = f"You are an expert AI fitness coach for {activity_type}."
+
+        if prompt_type == 'rep_group_analysis':
+            return f"""
+                {base_prompt}
+                
+                You are analyzing a batch of frames covering the last 5 reps.
+                The user has completed {rep_count} total reps.
+                
+                Analyze the sequence of images to identify the most important form correction the user should make.
+                Provide a single, concise, and actionable tip (15-20 words).
+                
+                - Focus on the biggest mistake or area for improvement.
+                - Do not comment on good form, only corrections.
+                - Do not use generic encouragement.
+                - Frame the feedback constructively for the next set of reps.
+
+                Example: "Great effort on those reps. For the next set, focus on keeping your elbows closer to your body during the push-up."
+            """
+        
+        # ... (other prompt types can be added here)
+
+        return f"{base_prompt} Provide general feedback."

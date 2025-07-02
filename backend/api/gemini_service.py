@@ -5,6 +5,8 @@ import base64
 from typing import List, Dict, Any
 from django.conf import settings
 import json
+import httpx
+import logging
 
 # Make OpenCV optional for development
 try:
@@ -14,6 +16,8 @@ except ImportError:
     CV2_AVAILABLE = False
     print("Warning: OpenCV not available. Video processing will be limited.")
 
+logger = logging.getLogger(__name__)
+
 class GeminiAnalysisService:
     """
     Service for analyzing videos using Google Gemini AI
@@ -22,6 +26,7 @@ class GeminiAnalysisService:
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
         self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        self.timeout = 30  # Assuming a default timeout
     
     def extract_frames(self, video_path: str, max_frames: int = 30) -> List[str]:
         """
@@ -380,54 +385,74 @@ class GeminiAnalysisService:
             "cues_given": len(all_cues)
         }
     
-    async def analyze_video_frame(self, frame_data: str, prompt: str) -> str:
+    async def analyze_video_frames(self, frames_data: List[str], prompt: str) -> str:
         """
-        Analyze a single video frame for real-time coaching
+        Analyze a sequence of video frames for comprehensive feedback.
         """
+        if not self.api_key:
+            return "Error: Gemini API key not configured"
+
+        if not frames_data:
+            return "Error: No frames provided for analysis"
+
         try:
-            # Prepare request for Gemini with single frame
-            parts = [
-                {"text": prompt},
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": frame_data
-                    }
-                }
-            ]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={self.api_key}"
             
+            # Construct a multi-image prompt
+            parts = [{"text": prompt}]
+            for frame_data in frames_data:
+                if frame_data and len(frame_data.strip()) > 50:
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": frame_data
+                        }
+                    })
+
             payload = {
-                "contents": [{
-                    "parts": parts
-                }],
+                "contents": [{"parts": parts}],
                 "generationConfig": {
-                    "temperature": 0.7,
-                    "topK": 40,
-                    "topP": 0.95,
-                    "maxOutputTokens": 200,  # Shorter for real-time feedback
-                }
+                    "temperature": 0.3,
+                    "topK": 32,
+                    "topP": 1,
+                    "maxOutputTokens": 256,
+                    "stopSequences": []
+                },
+                "safetySettings": [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                ]
             }
+
+            headers = {'Content-Type': 'application/json'}
             
-            # Make request to Gemini API
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(
-                f"{self.api_url}?key={self.api_key}",
-                headers=headers,
-                json=payload,
-                timeout=10  # Shorter timeout for real-time
-            )
+            # Make the async request
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, headers=headers, timeout=self.timeout)
+
             response.raise_for_status()
+            response_json = response.json()
             
-            result = response.json()
-            
-            if 'candidates' not in result or not result['candidates']:
-                return None
-            
-            return result['candidates'][0]['content']['parts'][0]['text']
-            
+            if 'candidates' in response_json and response_json['candidates']:
+                content = response_json['candidates'][0]['content']['parts'][0]['text']
+                return content.strip()
+            else:
+                logger.warning(f"Gemini API response missing candidates: {response_json}")
+                return ""
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error analyzing frames: {e.response.status_code} - {e.response.text}")
+            # Reraise to be handled by the coaching service
+            raise e
         except Exception as e:
-            print(f"Frame analysis error: {e}")
-            return None 
+            logger.error(f"An unexpected error occurred during frame analysis: {e}")
+            raise e
+
+    async def analyze_video_frame(self, frame_data: str, prompt: str) -> str:
+        """Analyze a single video frame for real-time coaching."""
+        # This method can now be a simple wrapper around the batch method
+        if not frame_data:
+             return await self.analyze_video_frames([], prompt)
+        return await self.analyze_video_frames([frame_data], prompt) 

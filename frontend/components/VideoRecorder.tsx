@@ -35,7 +35,7 @@ interface PoseData {
 
 interface CoachingCue {
   message: string
-  type: 'good' | 'warning' | 'tip' | 'rep_complete'
+  type: 'good' | 'warning' | 'tip' | 'rep_complete' | 'batch_analysis' | 'ai_intro' | 'heuristic_fallback'
   timestamp: number
   repNumber?: number
   formScore?: number
@@ -480,7 +480,9 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
             totalReps: newRepCount
           }))
 
-          await speak(data.feedback, 'rep_complete')
+          if (data.feedback && data.feedback.trim().length > 0) {
+            await speak(data.feedback, 'rep_complete')
+          }
 
           // Reset for next rep after feedback
           setTimeout(() => {
@@ -598,7 +600,9 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
       totalReps: newRepCount
     }))
 
-    await speak(feedback, 'rep_complete')
+    if (feedback && feedback.trim().length > 0) {
+      await speak(feedback, 'rep_complete')
+    }
 
     // Reset for next rep after feedback
     setTimeout(() => {
@@ -675,34 +679,13 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
 
   // Get feedback for completed rep
   const getRepFeedback = async (repNumber: number, activity: string): Promise<string> => {
-    const messages = [
-      `Great rep ${repNumber}! Keep that form consistent.`,
-      `Nice work on rep ${repNumber}! Focus on control.`,
-      `Excellent rep ${repNumber}! Remember to breathe.`,
-      `Good job on rep ${repNumber}! Maintain that rhythm.`,
-      `Perfect rep ${repNumber}! Keep it up!`
-    ]
-    
-    return messages[Math.floor(Math.random() * messages.length)]
+    // Disable generic fallback messages – frontend relies on backend AI feedback
+    return ''
   }
 
   // Analyze current form during movement
   const analyzeCurrentForm = (landmarks: any[], activity: string): string | null => {
-    // Basic form analysis - in a real implementation, this would be more sophisticated
-    if (!landmarks || landmarks.length < 10) return null
-    
-    const tips = [
-      "Keep your core engaged",
-      "Remember to breathe steadily", 
-      "Focus on controlled movement",
-      "Maintain good posture"
-    ]
-    
-    // Return occasional tips
-    if (Math.random() < 0.3) {
-      return tips[Math.floor(Math.random() * tips.length)]
-    }
-    
+    // Disable generic local tips – all continuous feedback comes from backend AI
     return null
   }
 

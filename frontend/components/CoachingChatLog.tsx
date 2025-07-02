@@ -11,7 +11,7 @@ import {
 
 interface CoachingCue {
   message: string
-  type: 'good' | 'warning' | 'tip' | 'rep_complete'
+  type: 'good' | 'warning' | 'tip' | 'rep_complete' | 'batch_analysis' | 'ai_intro' | 'heuristic_fallback'
   timestamp: number
   repNumber?: number
   formScore?: number

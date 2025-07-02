@@ -547,133 +547,39 @@ def stop_live_coaching(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @csrf_exempt
-def analyze_live_frame(request):
-    """Analyze a single frame for live coaching feedback with proper rep counting"""
+async def analyze_live_frame(request):
+    """Analyze a single frame for live coaching feedback with batching."""
     user = request.user
     
     try:
-        # Get frame data
         frame_data = request.data.get('frame_data')
         activity_type = request.data.get('activity_type', 'general')
         pose_data = request.data.get('pose_data', {})
         current_time = request.data.get('timestamp', int(time.time() * 1000))
         
         if not frame_data and not pose_data:
-            return Response({
-                'error': 'No frame data or pose data provided'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No frame data or pose data provided'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Initialize coaching service
         coaching_service = COACHING_SERVICE
-        
-        # Get user state
-        user_state = coaching_service.get_user_state(str(user.id))
-        
-        # Check for movement completion (squat, pushup, etc.)
-        movement_completed = False
-        if pose_data:
-            movement_completed = coaching_service.detect_movement_completion(pose_data, activity_type)
-        
-        # Initialize response data
-        response_data = {
-            'should_provide_feedback': False,
-            'movement_completed': movement_completed,
-            'feedback': None,
-            'rep_count': user_state.get('rep_count', 0),
-            'phase': user_state.get('phase', 'monitoring'),
-            'activity_type': activity_type
+        context = {
+            'user_id': str(user.id),
+            'pose_data': pose_data,
+            'timestamp': current_time
         }
         
-        # If movement completed (squat finished, pushup completed, etc.)
-        if movement_completed:
-            # Increment rep count
-            user_state['rep_count'] += 1
-            user_state['last_feedback'] = current_time
-            
-            logger.info(f"Rep {user_state['rep_count']} completed for {activity_type}")
-            
-            # Generate AI feedback for this completed rep
-            try:
-                import asyncio
-                
-                # Create specific prompt for completed rep feedback
-                rep_feedback_prompt = f"""
-                You are an expert {activity_type} coach. The user just completed rep #{user_state['rep_count']}.
-                
-                Analyze their form in this completed rep and provide:
-                - Brief (15-20 words) specific feedback on their technique
-                - What they did well in this rep
-                - One specific improvement for the next rep
-                - Use an encouraging but corrective tone
-                
-                Focus on: depth, knee tracking, back position, and control for squats.
-                Be specific about what you observed in THIS rep.
-                
-                Current rep: {user_state['rep_count']}
-                Activity: {activity_type}
-                """
-                
-                # Get AI coaching response for completed rep
-                feedback = asyncio.run(
-                    coaching_service.gemini_service.analyze_video_frame(
-                        frame_data or "",
-                        rep_feedback_prompt
-                    )
-                )
-                
-                if feedback and len(feedback.strip()) > 0:
-                    response_data.update({
-                        'should_provide_feedback': True,
-                        'feedback': feedback,
-                        'rep_count': user_state['rep_count'],
-                        'feedback_type': 'rep_completed',
-                        'movement_completed': True
-                    })
-                    
-                    # Record analysis usage
-                    user.record_analysis()
-                    
-                    logger.info(f"AI feedback provided for {activity_type} rep {user_state['rep_count']}")
-                else:
-                    # If AI fails, still count the rep but no feedback
-                    logger.warning(f"AI feedback failed for {activity_type} rep {user_state['rep_count']}")
-                    response_data.update({
-                        'should_provide_feedback': False,
-                        'rep_count': user_state['rep_count'],
-                        'feedback_type': 'rep_completed',
-                        'movement_completed': True,
-                        'message': 'Rep counted, AI feedback unavailable'
-                    })
-                    
-            except Exception as e:
-                logger.error(f"Error generating rep feedback: {e}")
-                # Still count the rep even if feedback fails
-                response_data.update({
-                    'should_provide_feedback': False,
-                    'rep_count': user_state['rep_count'],
-                    'feedback_type': 'rep_completed', 
-                    'movement_completed': True,
-                    'error': 'Rep counted, feedback generation failed'
-                })
-        
-        else:
-            # No movement completed - just monitoring
-            response_data.update({
-                'should_provide_feedback': False,
-                'movement_completed': False,
-                'rep_count': user_state['rep_count'],
-                'feedback_type': 'monitoring',
-                'message': 'Monitoring form, no rep completed'
-            })
+        # The service method is now async, so we can await it directly
+        response_data = await coaching_service.analyze_live_frame(
+            frame_data, activity_type, context
+        )
         
         return Response(response_data)
-        
+
     except Exception as e:
-        logger.error(f"Error in analyze_live_frame: {e}")
-        return Response({
-            'error': 'Failed to analyze live frame',
-            'message': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error in analyze_live_frame view: {e}", exc_info=True)
+        return Response(
+            {'error': 'An unexpected error occurred during frame analysis.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
