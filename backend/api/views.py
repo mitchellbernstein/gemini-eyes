@@ -6,8 +6,10 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.http import HttpResponse
 import json
 import time
+import logging
 
 from .templates import ACTIVITY_TEMPLATES, get_template_by_id
 from .gemini_service import GeminiAnalysisService
@@ -16,6 +18,11 @@ from .realtime_coaching import RealtimeCoachingService
 from .elevenlabs_service import ElevenLabsService
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
+
+# Create a single coaching service instance that persists across requests
+COACHING_SERVICE = RealtimeCoachingService()
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -259,24 +266,33 @@ def verify_google_token(request):
 @csrf_exempt
 def realtime_coaching(request):
     """Real-time coaching analysis for live feedback"""
+    import asyncio
+    
     try:
         data = json.loads(request.body)
         frame_data = data.get('frame_data')
-        activity_name = data.get('activity_name')
-        context = data.get('context', {})
+        activity_type = data.get('activity_type')  # Frontend sends activity_type
+        pose_data = data.get('pose_data', {})
         
-        if not frame_data or not activity_name:
+        if not frame_data or not activity_type:
             return Response({
                 'success': False,
-                'error': 'Missing frame_data or activity_name'
+                'error': 'Missing frame_data or activity_type'
             }, status=status.HTTP_400_BAD_REQUEST)
         
+        # Build context from request data
+        context = {
+            'user_id': str(request.user.id),
+            'timestamp': pose_data.get('timestamp', int(time.time() * 1000)),
+            'pose_data': pose_data
+        }
+        
         # Initialize coaching service
-        coaching_service = RealtimeCoachingService()
+        coaching_service = COACHING_SERVICE
         
         # Check if we should analyze this frame (avoid spam)
-        user_id = str(request.user.id)
-        current_time = context.get('timestamp', int(time.time() * 1000))
+        user_id = context['user_id']
+        current_time = context['timestamp']
         
         if not coaching_service.should_analyze_frame(user_id, current_time):
             return Response({
@@ -284,14 +300,14 @@ def realtime_coaching(request):
                 'message': 'Analysis skipped - too frequent'
             })
         
-        # Analyze the frame
-        result = coaching_service.analyze_live_frame(frame_data, activity_name, context)
+        # Analyze the frame using asyncio.run for async compatibility
+        result = asyncio.run(coaching_service.analyze_live_frame(frame_data, activity_type, context))
         
         if result['success']:
             # Track coaching interaction
             analytics.track_coaching_feedback(
                 user_id=user_id,
-                activity_type=activity_name,
+                activity_type=activity_type,
                 feedback_type=result.get('type', 'tip'),
                 feedback_length=len(result.get('feedback', ''))
             )
@@ -375,4 +391,353 @@ def generate_speech(request):
             'success': False,
             'error': str(e),
             'fallback': True
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@csrf_exempt
+def analyze_complete_rep(request):
+    """Analyze a complete rep after it's finished for expert coaching feedback"""
+    try:
+        data = json.loads(request.body)
+        activity_type = data.get('activity_type')
+        rep_data = data.get('rep_data', {})
+        user_context = data.get('user_context', {})
+        
+        if not activity_type or not rep_data:
+            return Response({
+                'success': False,
+                'error': 'Missing activity_type or rep_data'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Initialize coaching service
+        coaching_service = COACHING_SERVICE
+        
+        # Create complete rep coaching feedback
+        feedback = coaching_service.analyze_complete_rep(
+            activity_type=activity_type,
+            rep_data=rep_data,
+            user_context=user_context
+        )
+        
+        if feedback:
+            # Track rep analysis
+            analytics.track_event('rep_analyzed', str(request.user.id), {
+                'activity_type': activity_type,
+                'rep_number': rep_data.get('number', 0),
+                'form_score': rep_data.get('formScore', 0),
+                'feedback_length': len(feedback)
+            })
+            
+            return Response({
+                'success': True,
+                'feedback': feedback
+            })
+        else:
+            return Response({
+                'success': False,
+                'error': 'No feedback generated'
+            })
+            
+    except json.JSONDecodeError:
+        return Response({
+            'success': False,
+            'error': 'Invalid JSON data'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@csrf_exempt
+def start_live_coaching(request):
+    """Start a live coaching session for continuous analysis"""
+    user = request.user
+    
+    # Check rate limits
+    can_analyze, message = user.can_analyze()
+    if not can_analyze:
+        return Response({
+            'error': 'Rate limit exceeded',
+            'message': message
+        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    
+    try:
+        activity_type = request.data.get('activity_type', 'general')
+        
+        # Initialize live coaching service
+        coaching_service = COACHING_SERVICE
+        
+        # Create or get user state
+        user_state = coaching_service.get_user_state(str(user.id))
+        user_state['phase'] = 'setup'
+        user_state['rep_count'] = 0
+        user_state['movement_detected'] = False
+        
+        # Track live coaching session start
+        if analytics:
+            analytics.track_analysis_request(
+                user_id=str(user.id),
+                activity_type=f"Live Coaching: {activity_type}",
+                template_id=None,
+                video_size=0,
+                custom_prompt=False
+            )
+        
+        return Response({
+            'success': True,
+            'message': 'Live coaching session started',
+            'session_id': f"live_{user.id}_{int(time.time())}",
+            'activity_type': activity_type,
+            'user_state': user_state
+        })
+        
+    except Exception as e:
+        return Response({
+            'error': 'Failed to start live coaching session',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@csrf_exempt
+def stop_live_coaching(request):
+    """Stop a live coaching session"""
+    user = request.user
+    
+    try:
+        session_id = request.data.get('session_id')
+        coaching_data = request.data.get('coaching_data', {})
+        
+        # Initialize coaching service
+        coaching_service = COACHING_SERVICE
+        
+        # Reset user state
+        coaching_service.reset_user_state(str(user.id))
+        
+        # Track session completion
+        if analytics:
+            analytics.track_analysis_completion(
+                user_id=str(user.id),
+                activity_type="Live Coaching Session",
+                success=True,
+                processing_time=0,
+                frames_analyzed=coaching_data.get('total_reps', 0)
+            )
+        
+        return Response({
+            'success': True,
+            'message': 'Live coaching session stopped',
+            'session_summary': {
+                'total_reps': coaching_data.get('total_reps', 0),
+                'session_duration': coaching_data.get('duration', 0),
+                'feedback_given': coaching_data.get('feedback_count', 0)
+            }
+        })
+        
+    except Exception as e:
+        return Response({
+            'error': 'Failed to stop live coaching session',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@csrf_exempt
+def analyze_live_frame(request):
+    """Analyze a single frame for live coaching feedback with proper rep counting"""
+    user = request.user
+    
+    try:
+        # Get frame data
+        frame_data = request.data.get('frame_data')
+        activity_type = request.data.get('activity_type', 'general')
+        pose_data = request.data.get('pose_data', {})
+        current_time = request.data.get('timestamp', int(time.time() * 1000))
+        
+        if not frame_data and not pose_data:
+            return Response({
+                'error': 'No frame data or pose data provided'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Initialize coaching service
+        coaching_service = COACHING_SERVICE
+        
+        # Get user state
+        user_state = coaching_service.get_user_state(str(user.id))
+        
+        # Check for movement completion (squat, pushup, etc.)
+        movement_completed = False
+        if pose_data:
+            movement_completed = coaching_service.detect_movement_completion(pose_data, activity_type)
+        
+        # Initialize response data
+        response_data = {
+            'should_provide_feedback': False,
+            'movement_completed': movement_completed,
+            'feedback': None,
+            'rep_count': user_state.get('rep_count', 0),
+            'phase': user_state.get('phase', 'monitoring'),
+            'activity_type': activity_type
+        }
+        
+        # If movement completed (squat finished, pushup completed, etc.)
+        if movement_completed:
+            # Increment rep count
+            user_state['rep_count'] += 1
+            user_state['last_feedback'] = current_time
+            
+            logger.info(f"Rep {user_state['rep_count']} completed for {activity_type}")
+            
+            # Generate AI feedback for this completed rep
+            try:
+                import asyncio
+                
+                # Create specific prompt for completed rep feedback
+                rep_feedback_prompt = f"""
+                You are an expert {activity_type} coach. The user just completed rep #{user_state['rep_count']}.
+                
+                Analyze their form in this completed rep and provide:
+                - Brief (15-20 words) specific feedback on their technique
+                - What they did well in this rep
+                - One specific improvement for the next rep
+                - Use an encouraging but corrective tone
+                
+                Focus on: depth, knee tracking, back position, and control for squats.
+                Be specific about what you observed in THIS rep.
+                
+                Current rep: {user_state['rep_count']}
+                Activity: {activity_type}
+                """
+                
+                # Get AI coaching response for completed rep
+                feedback = asyncio.run(
+                    coaching_service.gemini_service.analyze_video_frame(
+                        frame_data or "",
+                        rep_feedback_prompt
+                    )
+                )
+                
+                if feedback and len(feedback.strip()) > 0:
+                    response_data.update({
+                        'should_provide_feedback': True,
+                        'feedback': feedback,
+                        'rep_count': user_state['rep_count'],
+                        'feedback_type': 'rep_completed',
+                        'movement_completed': True
+                    })
+                    
+                    # Record analysis usage
+                    user.record_analysis()
+                    
+                    logger.info(f"AI feedback provided for {activity_type} rep {user_state['rep_count']}")
+                else:
+                    # If AI fails, still count the rep but no feedback
+                    logger.warning(f"AI feedback failed for {activity_type} rep {user_state['rep_count']}")
+                    response_data.update({
+                        'should_provide_feedback': False,
+                        'rep_count': user_state['rep_count'],
+                        'feedback_type': 'rep_completed',
+                        'movement_completed': True,
+                        'message': 'Rep counted, AI feedback unavailable'
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error generating rep feedback: {e}")
+                # Still count the rep even if feedback fails
+                response_data.update({
+                    'should_provide_feedback': False,
+                    'rep_count': user_state['rep_count'],
+                    'feedback_type': 'rep_completed', 
+                    'movement_completed': True,
+                    'error': 'Rep counted, feedback generation failed'
+                })
+        
+        else:
+            # No movement completed - just monitoring
+            response_data.update({
+                'should_provide_feedback': False,
+                'movement_completed': False,
+                'rep_count': user_state['rep_count'],
+                'feedback_type': 'monitoring',
+                'message': 'Monitoring form, no rep completed'
+            })
+        
+        return Response(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error in analyze_live_frame: {e}")
+        return Response({
+            'error': 'Failed to analyze live frame',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@csrf_exempt
+def get_live_feedback(request):
+    """Get continuous form feedback during live coaching - CONSOLIDATED to prevent overlapping speech"""
+    user = request.user
+    
+    try:
+        activity_type = request.data.get('activity_type', 'general')
+        pose_data = request.data.get('pose_data', {})
+        frame_data = request.data.get('frame_data', '')  # Get actual frame data
+        current_time = request.data.get('timestamp', int(time.time() * 1000))
+        
+        # Initialize coaching service
+        coaching_service = COACHING_SERVICE
+        
+        # Check if we should provide feedback (rate limiting to prevent overlap)
+        if not coaching_service.should_provide_coaching(str(user.id), activity_type):
+            return Response({
+                'should_provide_feedback': False,
+                'message': 'Feedback rate limited'
+            })
+        
+        # Use the consolidated analyze_live_frame method to prevent timing conflicts
+        try:
+            import asyncio
+            context = {
+                'user_id': str(user.id),
+                'timestamp': current_time,
+                'pose_data': pose_data
+            }
+            
+            # Use the same method as other endpoints to prevent conflicts
+            result = asyncio.run(coaching_service.analyze_live_frame(frame_data, activity_type, context))
+            
+            if result.get('success') and result.get('feedback'):
+                # Record analysis usage
+                user.record_analysis()
+                
+                return Response({
+                    'should_provide_feedback': True,
+                    'feedback': result['feedback'],
+                    'feedback_type': result.get('type', 'ai_analysis'),
+                    'activity': result.get('activity', activity_type),
+                    'rep_count': result.get('rep_count', 0)
+                })
+            else:
+                return Response({
+                    'should_provide_feedback': False,
+                    'message': result.get('message', 'No feedback needed at this time')
+                })
+            
+        except Exception as e:
+            logger.error(f"Error in get_live_feedback: {e}")
+            # NO FALLBACK FEEDBACK - return empty response
+            return Response({
+                'should_provide_feedback': False,
+                'error': f'AI feedback failed: {str(e)}'
+            })
+        
+    except Exception as e:
+        logger.error(f"Error in get_live_feedback endpoint: {e}")
+        return Response({
+            'error': 'Failed to get live feedback',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

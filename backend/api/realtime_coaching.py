@@ -18,17 +18,48 @@ class RealtimeCoachingService:
     def get_coaching_interval(self, activity_type: str) -> float:
         """Get appropriate coaching interval for each activity type"""
         intervals = {
-            'basketball': 2.0,  # After each shot attempt
-            'squat': 1.5,      # After each rep
-            'pushup': 1.5,     # After each rep  
-            'tennis': 2.5,     # After each swing
-            'golf': 3.0,       # After each swing
-            'custom': 2.0      # General interval
+            # Discrete rep exercises - feedback after each rep/set
+            'basketball': 3.0,  # After each shot attempt - longer to avoid overlap
+            'squat': 2.5,      # After each rep - slightly longer
+            'pushup': 2.5,     # After each rep - slightly longer
+            'jumping jack': 2.5, # After each rep
+            
+            # Swing sports - longer intervals due to setup time
+            'tennis': 4.0,     # After each swing - need time for setup
+            'golf': 5.0,       # After each swing - longer setup and analysis
+            
+            # Hold exercises - different timing pattern
+            'plank': 8.0,      # Every 8 seconds for form corrections
+            'wall sit': 8.0,   # Every 8 seconds for encouragement
+            
+            # Default
+            'custom': 3.0      # Conservative general interval
         }
-        return intervals.get(activity_type, 2.0)
+        
+        # Check if activity name contains key terms
+        activity_lower = activity_type.lower()
+        
+        if 'plank' in activity_lower:
+            return intervals['plank']
+        elif 'golf' in activity_lower:
+            return intervals['golf']
+        elif 'tennis' in activity_lower:
+            return intervals['tennis']
+        elif 'basketball' in activity_lower:
+            return intervals['basketball'] 
+        elif 'squat' in activity_lower:
+            return intervals['squat']
+        elif 'pushup' in activity_lower or 'push-up' in activity_lower or 'push up' in activity_lower:
+            return intervals['pushup']
+        elif 'jumping jack' in activity_lower:
+            return intervals['jumping jack']
+        elif 'wall sit' in activity_lower:
+            return intervals['wall sit']
+        else:
+            return intervals['custom']
     
     def should_provide_coaching(self, user_id: str, activity_type: str) -> bool:
-        """Rate limiting for coaching feedback"""
+        """Rate limiting for coaching feedback with activity-specific logic"""
         current_time = time.time()
         interval = self.get_coaching_interval(activity_type)
         
@@ -63,7 +94,12 @@ class RealtimeCoachingService:
                 'phase': 'setup',  # setup, monitoring, post_rep
                 'rep_count': 0,
                 'last_feedback': None,
-                'movement_detected': False
+                'movement_detected': False,
+                # Add squat-specific state tracking
+                'squat_state': 'standing',  # standing, descending, bottom, ascending
+                'last_squat_position': None,
+                'squat_depth_threshold': 0.08,  # Minimum depth for valid squat
+                'position_history': []  # Track recent positions for movement detection
             }
         return self.user_states[user_id]
     
@@ -75,64 +111,252 @@ class RealtimeCoachingService:
         landmarks = pose_data['landmarks']
         
         try:
-            if activity_type == 'squat':
-                # Detect squat completion: hip goes down then back up
-                if len(landmarks) >= 24:  # Ensure we have hip landmarks
-                    left_hip = landmarks[23]
-                    right_hip = landmarks[24]
-                    left_knee = landmarks[25] if len(landmarks) > 25 else None
-                    right_knee = landmarks[26] if len(landmarks) > 26 else None
-                    
-                    if left_knee and right_knee:
-                        # Simple heuristic: if hips are above knees, squat completed
-                        hip_avg_y = (left_hip.get('y', 0) + right_hip.get('y', 0)) / 2
-                        knee_avg_y = (left_knee.get('y', 0) + right_knee.get('y', 0)) / 2
+            if activity_type.lower().find('squat') != -1:
+                return self._detect_squat_completion(landmarks)
+            elif activity_type.lower().find('pushup') != -1 or activity_type.lower().find('push-up') != -1:
+                return self._detect_pushup_completion(landmarks)
+            elif activity_type.lower().find('jumping jack') != -1:
+                return self._detect_jumping_jack_completion(landmarks)
+            elif activity_type.lower().find('basketball') != -1:
+                return self._detect_basketball_shot_completion(landmarks)
+            elif activity_type.lower().find('tennis') != -1 or activity_type.lower().find('golf') != -1:
+                return self._detect_swing_completion(landmarks)
+            elif activity_type.lower().find('plank') != -1:
+                return self._detect_plank_hold_completion(landmarks)
+            else:
+                # Generic movement detection
+                return self._detect_generic_movement_completion(landmarks)
                         
-                        # In normalized coordinates, lower y = higher position
-                        return hip_avg_y < knee_avg_y  # Hips above knees = standing position
-                        
-            elif activity_type == 'pushup':
-                # Detect pushup completion: body goes down then back up
-                if len(landmarks) >= 12:  # Ensure we have shoulder landmarks
-                    left_shoulder = landmarks[11]
-                    right_shoulder = landmarks[12]
-                    left_wrist = landmarks[15] if len(landmarks) > 15 else None
-                    right_wrist = landmarks[16] if len(landmarks) > 16 else None
-                    
-                    if left_wrist and right_wrist:
-                        # Simple heuristic: if shoulders are above wrists, pushup completed
-                        shoulder_avg_y = (left_shoulder.get('y', 0) + right_shoulder.get('y', 0)) / 2
-                        wrist_avg_y = (left_wrist.get('y', 0) + right_wrist.get('y', 0)) / 2
-                        
-                        return shoulder_avg_y < wrist_avg_y  # Shoulders above wrists = up position
-                        
-            elif activity_type == 'basketball':
-                # Detect shot completion: arms go up then come down
-                if len(landmarks) >= 16:  # Ensure we have arm landmarks
-                    left_wrist = landmarks[15]
-                    right_wrist = landmarks[16]
-                    nose = landmarks[0]
-                    
-                    # Simple heuristic: if wrists are below nose level, shot completed
-                    wrist_avg_y = (left_wrist.get('y', 0) + right_wrist.get('y', 0)) / 2
-                    nose_y = nose.get('y', 0)
-                    
-                    return wrist_avg_y > nose_y  # Wrists below nose = arms down
-                    
-            elif activity_type in ['tennis', 'golf']:
-                # Detect swing completion: significant arm movement
-                if len(landmarks) >= 16:  # Ensure we have arm landmarks
-                    left_wrist = landmarks[15]
-                    right_wrist = landmarks[16]
-                    
-                    # Simple heuristic: if wrists are in resting position (complex detection needed)
-                    # For now, return True periodically to simulate swing detection
-                    return True
-                    
         except (KeyError, IndexError, TypeError) as e:
             logger.warning(f"Error in movement detection for {activity_type}: {e}")
             
         return False
+
+    def _detect_squat_completion(self, landmarks: List[Dict]) -> bool:
+        """
+        Detect squat completion by tracking the full down-up cycle
+        Uses state machine to track: standing -> descending -> bottom -> ascending -> standing (COMPLETED)
+        """
+        if len(landmarks) < 28:
+            return False
+            
+        try:
+            # Get key landmarks for squat analysis
+            left_hip = landmarks[23]
+            right_hip = landmarks[24]
+            left_knee = landmarks[25]
+            right_knee = landmarks[26]
+            left_ankle = landmarks[27] if len(landmarks) > 27 else None
+            right_ankle = landmarks[28] if len(landmarks) > 28 else None
+            
+            if not (left_ankle and right_ankle):
+                return False
+            
+            # Calculate position metrics
+            hip_avg_y = (left_hip.get('y', 0) + right_hip.get('y', 0)) / 2
+            knee_avg_y = (left_knee.get('y', 0) + right_knee.get('y', 0)) / 2
+            ankle_avg_y = (left_ankle.get('y', 0) + right_ankle.get('y', 0)) / 2
+            
+            # Hip-to-knee distance (positive = hips above knees, negative = hips below knees)
+            hip_knee_diff = knee_avg_y - hip_avg_y
+            
+            # Get or create state tracking for this detection cycle
+            if not hasattr(self, '_squat_detection_state'):
+                self._squat_detection_state = {
+                    'current_state': 'standing',
+                    'min_depth_reached': 0,
+                    'position_history': []
+                }
+            
+            state = self._squat_detection_state
+            
+            # Track position history for smoothing
+            state['position_history'].append(hip_knee_diff)
+            if len(state['position_history']) > 5:
+                state['position_history'].pop(0)
+            
+            # Use average of recent positions to smooth detection
+            avg_position = sum(state['position_history']) / len(state['position_history'])
+            
+            # State machine for squat detection
+            if state['current_state'] == 'standing':
+                # Looking for start of descent
+                if avg_position < 0.02:  # Hips starting to drop below knee level
+                    state['current_state'] = 'descending'
+                    state['min_depth_reached'] = avg_position
+                    print(f"🔽 Squat: Started descending (hip-knee diff: {avg_position:.3f})")
+                    
+            elif state['current_state'] == 'descending':
+                # Track depth and look for bottom position
+                state['min_depth_reached'] = min(state['min_depth_reached'], avg_position)
+                
+                if avg_position < -0.08:  # Good depth reached
+                    state['current_state'] = 'bottom'
+                    print(f"⬇️ Squat: Reached bottom, depth: {state['min_depth_reached']:.3f}")
+                elif avg_position > 0.02:  # Started going back up without good depth
+                    state['current_state'] = 'ascending'
+                    print(f"🔼 Squat: Ascending (shallow, depth: {state['min_depth_reached']:.3f})")
+                    
+            elif state['current_state'] == 'bottom':
+                # Look for start of ascent
+                if avg_position > state['min_depth_reached'] + 0.03:  # Clear upward movement
+                    state['current_state'] = 'ascending'
+                    print(f"⬆️ Squat: Started ascending from depth {state['min_depth_reached']:.3f}")
+                    
+            elif state['current_state'] == 'ascending':
+                # Look for return to standing position
+                if avg_position > 0.05:  # Back to standing position
+                    # Check if this was a valid squat (good depth)
+                    if state['min_depth_reached'] < -0.08:
+                        print(f"🎯 Squat COMPLETED! Depth: {state['min_depth_reached']:.3f} ✅")
+                        # Reset state for next squat
+                        state['current_state'] = 'standing'
+                        state['min_depth_reached'] = 0
+                        state['position_history'] = []
+                        return True  # SQUAT COMPLETED!
+                    else:
+                        print(f"❌ Squat incomplete - insufficient depth: {state['min_depth_reached']:.3f} (need < -0.08)")
+                        # Reset state - shallow squat doesn't count
+                        state['current_state'] = 'standing'
+                        state['min_depth_reached'] = 0
+                        state['position_history'] = []
+            
+            return False  # No completed squat yet
+            
+        except (KeyError, TypeError) as e:
+            logger.error(f"Error in squat detection: {e}")
+            return False
+
+    def _detect_pushup_completion(self, landmarks: List[Dict]) -> bool:
+        """Detect pushup completion using shoulder and wrist positions"""
+        if len(landmarks) < 16:
+            return False
+            
+        try:
+            left_shoulder = landmarks[11]
+            right_shoulder = landmarks[12]
+            left_wrist = landmarks[15]
+            right_wrist = landmarks[16]
+            
+            # Calculate average positions
+            shoulder_avg_y = (left_shoulder.get('y', 0) + right_shoulder.get('y', 0)) / 2
+            wrist_avg_y = (left_wrist.get('y', 0) + right_wrist.get('y', 0)) / 2
+            
+            # Pushup completed when shoulders are above wrists (up position)
+            shoulder_wrist_diff = wrist_avg_y - shoulder_avg_y
+            
+            return shoulder_wrist_diff > 0.05  # Shoulders sufficiently above wrists
+            
+        except (KeyError, TypeError):
+            return False
+
+    def _detect_jumping_jack_completion(self, landmarks: List[Dict]) -> bool:
+        """Detect jumping jack completion using arm and leg positions"""
+        if len(landmarks) < 20:
+            return False
+            
+        try:
+            # Check arm position (wrists relative to shoulders)
+            left_shoulder = landmarks[11]
+            right_shoulder = landmarks[12]
+            left_wrist = landmarks[15]
+            right_wrist = landmarks[16]
+            
+            # Check leg position (ankles relative to hips)
+            left_hip = landmarks[23]
+            right_hip = landmarks[24]
+            left_ankle = landmarks[27] if len(landmarks) > 27 else None
+            right_ankle = landmarks[28] if len(landmarks) > 28 else None
+            
+            if not (left_ankle and right_ankle):
+                return False
+            
+            # Arms up and legs together = completion of jack
+            arms_up = (left_wrist.get('y', 0) < left_shoulder.get('y', 0) and 
+                      right_wrist.get('y', 0) < right_shoulder.get('y', 0))
+            
+            hip_distance = abs(left_hip.get('x', 0) - right_hip.get('x', 0))
+            ankle_distance = abs(left_ankle.get('x', 0) - right_ankle.get('x', 0))
+            
+            legs_together = ankle_distance <= hip_distance * 1.2  # Ankles close to hip width
+            
+            return arms_up and legs_together
+            
+        except (KeyError, TypeError):
+            return False
+
+    def _detect_basketball_shot_completion(self, landmarks: List[Dict]) -> bool:
+        """Detect basketball shot completion"""
+        if len(landmarks) < 16:
+            return False
+            
+        try:
+            left_wrist = landmarks[15]
+            right_wrist = landmarks[16]
+            nose = landmarks[0]
+            
+            # Shot completed when both wrists are below nose level (arms down after shot)
+            wrist_avg_y = (left_wrist.get('y', 0) + right_wrist.get('y', 0)) / 2
+            nose_y = nose.get('y', 0)
+            
+            return wrist_avg_y > nose_y + 0.1  # Wrists clearly below nose
+            
+        except (KeyError, TypeError):
+            return False
+
+    def _detect_swing_completion(self, landmarks: List[Dict]) -> bool:
+        """Detect tennis/golf swing completion"""
+        if len(landmarks) < 16:
+            return False
+            
+        try:
+            left_wrist = landmarks[15]
+            right_wrist = landmarks[16]
+            left_shoulder = landmarks[11]
+            right_shoulder = landmarks[12]
+            
+            # Swing completed when arms return to neutral position
+            # Check if wrists are near shoulder level (resting position)
+            shoulder_avg_y = (left_shoulder.get('y', 0) + right_shoulder.get('y', 0)) / 2
+            wrist_avg_y = (left_wrist.get('y', 0) + right_wrist.get('y', 0)) / 2
+            
+            return abs(wrist_avg_y - shoulder_avg_y) < 0.15  # Wrists near shoulder level
+            
+        except (KeyError, TypeError):
+            return False
+
+    def _detect_plank_hold_completion(self, landmarks: List[Dict]) -> bool:
+        """Detect plank hold completion (time-based)"""
+        # For plank, we'd typically track time in proper position
+        # This is a simplified version - in practice, you'd track duration
+        if len(landmarks) < 16:
+            return False
+            
+        try:
+            # Check if body is in plank position
+            left_shoulder = landmarks[11]
+            right_shoulder = landmarks[12]
+            left_hip = landmarks[23]
+            right_hip = landmarks[24]
+            
+            # Body should be relatively straight
+            shoulder_avg_y = (left_shoulder.get('y', 0) + right_shoulder.get('y', 0)) / 2
+            hip_avg_y = (left_hip.get('y', 0) + right_hip.get('y', 0)) / 2
+            
+            # For demo purposes, return True occasionally to simulate hold completion
+            body_straight = abs(shoulder_avg_y - hip_avg_y) < 0.1
+            return body_straight and (time.time() % 10 < 1)  # Simulate 10-second holds
+            
+        except (KeyError, TypeError):
+            return False
+
+    def _detect_generic_movement_completion(self, landmarks: List[Dict]) -> bool:
+        """Generic movement detection for unknown activities"""
+        if len(landmarks) < 10:
+            return False
+            
+        # Very basic detection - return True occasionally
+        return time.time() % 8 < 1  # Simulate movement every 8 seconds
     
     def get_expert_coaching_prompt(self, activity_type: str, phase: str, pose_data: Dict[str, Any], user_state: Dict[str, Any]) -> str:
         """Get expert-level coaching prompts based on activity and phase"""
@@ -335,94 +559,470 @@ class RealtimeCoachingService:
         if user_id in self.last_coaching_time:
             del self.last_coaching_time[user_id]
     
-    def analyze_live_frame(self, frame_data: str, activity_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def analyze_live_frame(self, frame_data: str, activity_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze a live frame for real-time coaching feedback
+        Analyze a live frame for real-time coaching feedback - WITH PROPER REP DETECTION
         """
         try:
             user_id = context.get('user_id', 'anonymous')
+            pose_data = context.get('pose_data', {})
             
             # Check if we should provide coaching for this user/activity
-            if not self.should_provide_coaching(user_id, activity_name):
+            if not self.should_provide_coaching(user_id, activity_type):
                 return {
                     'success': False,
                     'message': 'Coaching rate limited'
                 }
             
-            # Simple real-time coaching responses based on activity
-            feedback_responses = {
-                'basketball': [
-                    "Keep your elbow under the ball",
-                    "Follow through with your wrist",
-                    "Square your shoulders to the basket",
-                    "Use your legs for power",
-                    "Keep your shooting hand straight"
-                ],
-                'squat': [
-                    "Keep your chest up",
-                    "Push your knees out",
-                    "Go deeper if you can",
-                    "Drive through your heels",
-                    "Keep your core tight"
-                ],
-                'pushup': [
-                    "Keep your body straight",
-                    "Lower your chest to the ground",
-                    "Don't let your hips sag",
-                    "Keep your core engaged",
-                    "Full range of motion"
-                ],
-                'tennis': [
-                    "Follow through across your body",
-                    "Keep your eye on the ball",
-                    "Step into the shot",
-                    "Rotate your shoulders",
-                    "Good preparation"
-                ],
-                'golf': [
-                    "Keep your head steady",
-                    "Rotate your hips",
-                    "Follow through to finish",
-                    "Keep your left arm straight",
-                    "Smooth tempo"
-                ]
-            }
-            
-            # Get feedback for this activity
-            activity_feedback = feedback_responses.get(activity_name.lower(), [
-                "Good form!",
-                "Keep it up!",
-                "Nice technique",
-                "Stay focused",
-                "Great effort!"
-            ])
-            
-            # Better rotation through feedback to avoid repeats
             user_state = self.get_user_state(user_id)
-            last_feedback = user_state.get('last_feedback', '')
+            current_time = context.get('timestamp', int(time.time() * 1000))
             
-            # Try to avoid repeating the same message
-            available_feedback = [f for f in activity_feedback if f != last_feedback]
-            if not available_feedback:
-                available_feedback = activity_feedback
+            # CRITICAL: Check for actual movement completion first
+            movement_completed = False
+            landmarks = pose_data.get('landmarks', [])
             
-            import random
-            feedback = random.choice(available_feedback)
-            feedback_type = random.choice(['tip', 'good', 'warning'])
+            if landmarks and len(landmarks) > 0:
+                movement_completed = self.detect_movement_completion(pose_data, activity_type)
+                logger.info(f"Movement detection for {activity_type}: {'COMPLETED' if movement_completed else 'ongoing'}")
             
-            # Store this feedback to avoid immediate repeats
-            user_state['last_feedback'] = feedback
+            # State management: intro -> monitoring -> feedback -> monitoring...
+            coaching_phase = user_state.get('coaching_phase', 'intro')
+            last_coaching_time = user_state.get('last_coaching_time', 0)
+            current_rep_count = user_state.get('reps_completed', 0)
             
+            # If movement was completed, increment rep count and provide rep-specific feedback
+            if movement_completed:
+                current_rep_count += 1
+                user_state['reps_completed'] = current_rep_count
+                user_state['coaching_phase'] = 'feedback'
+                user_state['last_coaching_time'] = current_time
+                logger.info(f"REP COMPLETED! Count: {current_rep_count}")
+                
+                # Generate AI feedback for the completed rep
+                rep_feedback_prompt = f"""
+                You are an expert fitness coach providing feedback after a completed {activity_type}.
+                
+                The user just finished rep #{current_rep_count}.
+                
+                Provide specific, encouraging feedback about this rep and quick tip for the next one.
+                Keep it brief (10-15 words) since this is live voice coaching.
+                
+                Focus on form improvement, not generic encouragement.
+                Examples: "Good depth on rep {current_rep_count}! Keep knees behind toes for rep {current_rep_count + 1}."
+                """
+                
+                try:
+                    ai_feedback = await self.gemini_service.analyze_video_frame(
+                        frame_data or "", 
+                        rep_feedback_prompt
+                    )
+                    
+                    if ai_feedback:
+                        return {
+                            'success': True,
+                            'feedback': ai_feedback,
+                            'type': 'rep_completed',
+                            'activity': activity_type,
+                            'rep_count': current_rep_count,
+                            'movement_completed': True,
+                            'should_provide_feedback': True
+                        }
+                except Exception as e:
+                    logger.error(f"Error generating rep feedback: {e}")
+                    # Fallback to simple rep acknowledgment
+                    return {
+                        'success': True,
+                        'feedback': f"Rep {current_rep_count} complete! Keep going!",
+                        'type': 'rep_completed',
+                        'activity': activity_type,
+                        'rep_count': current_rep_count,
+                        'movement_completed': True,
+                        'should_provide_feedback': True
+                    }
+            
+            # If this is the first interaction, generate AI intro message
+            if coaching_phase == 'intro':
+                # Generate AI intro instead of pre-written
+                intro_prompt = f"""
+                You are an expert fitness coach starting a live coaching session for {activity_type}.
+                
+                Provide a brief (10-15 words), encouraging introduction to get them started.
+                Focus on what they should concentrate on first.
+                Be motivating and professional.
+                
+                Example style: "Let's perfect your technique! Focus on [specific form element] as we begin."
+                """
+                
+                try:
+                    ai_intro = await self.gemini_service.analyze_video_frame(
+                        frame_data or "Starting session", 
+                        intro_prompt
+                    )
+                    
+                    if ai_intro:
+                        # Mark as given intro, switch to monitoring phase
+                        user_state['coaching_phase'] = 'monitoring'
+                        user_state['last_intro_time'] = current_time
+                        user_state['last_coaching_time'] = current_time  # Set timing to prevent immediate next feedback
+                        
+                        return {
+                            'success': True,
+                            'feedback': ai_intro,
+                            'type': 'ai_intro',
+                            'activity': activity_type,
+                            'rep_count': current_rep_count,
+                            'movement_completed': False,
+                            'should_provide_feedback': True
+                        }
+                except Exception as e:
+                    logger.error(f"Error generating AI intro: {e}")
+                    # Skip intro if AI fails, go straight to monitoring
+                    user_state['coaching_phase'] = 'monitoring'
+                    user_state['last_coaching_time'] = current_time
+                    
+                    return {
+                        'success': False,
+                        'message': 'AI intro failed, proceeding to monitoring',
+                        'rep_count': current_rep_count,
+                        'movement_completed': False,
+                        'should_provide_feedback': False
+                    }
+            
+            # Monitoring phase: provide real-time AI analysis based on activity type
+            elif coaching_phase == 'monitoring':
+                time_since_last = current_time - last_coaching_time
+                
+                # Get activity-specific feedback strategy
+                feedback_strategy = self.get_activity_feedback_strategy(activity_type)
+                min_interval = self.get_coaching_interval(activity_type) * 1000  # Convert to ms
+                
+                # For activities like squats, don't give constant feedback - wait for reps
+                if activity_type.lower() in ['squat', 'squat form check', 'pushup', 'push-up technique']:
+                    return {
+                        'success': True,
+                        'message': f'Monitoring {activity_type} form - {current_rep_count} reps completed',
+                        'rep_count': current_rep_count,
+                        'movement_completed': False,
+                        'should_provide_feedback': False
+                    }
+                
+                if time_since_last < min_interval:
+                    return {
+                        'success': False,
+                        'message': f'Monitoring form - next feedback in {(min_interval - time_since_last) / 1000:.1f}s',
+                        'rep_count': current_rep_count,
+                        'movement_completed': False,
+                        'should_provide_feedback': False
+                    }
+                
+                # ONLY generate AI feedback for continuous activities (plank, jumping jacks)
+                try:
+                    # Create coaching prompt based on activity and strategy
+                    coaching_prompt = self.get_live_coaching_prompt(activity_type, feedback_strategy, user_state)
+                    
+                    # Use Gemini for real analysis instead of pre-written feedback
+                    full_prompt = f"""
+                    {coaching_prompt}
+                    
+                    Frame data: {frame_data}
+                    Current timestamp: {current_time}
+                    User rep count: {current_rep_count}
+                    
+                    CRITICAL: Provide ONLY original AI-generated feedback based on what you see.
+                    Do NOT use generic phrases like "maintain good posture" or "remember to breathe".
+                    Be specific about what you observe in THIS moment.
+                    """
+                    
+                    # Get AI analysis - this is the ONLY source of feedback
+                    feedback_response = await self.gemini_service.analyze_video_frame(
+                        frame_data, 
+                        full_prompt
+                    )
+                    
+                    if feedback_response and len(feedback_response.strip()) > 0:
+                        # Update state
+                        user_state['last_feedback'] = feedback_response
+                        user_state['last_coaching_time'] = current_time
+                        
+                        return {
+                            'success': True,
+                            'feedback': feedback_response,
+                            'type': 'ai_analysis',
+                            'activity': activity_type,
+                            'rep_count': current_rep_count,
+                            'movement_completed': False,
+                            'should_provide_feedback': True,
+                            'strategy': feedback_strategy
+                        }
+                    else:
+                        # If AI fails completely, return no feedback rather than fallback text
+                        logger.warning(f"AI feedback empty or failed for {activity_type}")
+                        return {
+                            'success': False,
+                            'message': 'AI analysis returned no feedback',
+                            'rep_count': current_rep_count,
+                            'movement_completed': False,
+                            'should_provide_feedback': False
+                        }
+                        
+                except Exception as e:
+                    logger.error(f"Error getting AI coaching feedback: {e}")
+                    return {
+                        'success': False,
+                        'error': f'AI analysis failed: {str(e)}',
+                        'rep_count': current_rep_count,
+                        'movement_completed': False,
+                        'should_provide_feedback': False
+                    }
+            
+            # Default fallback
             return {
-                'success': True,
-                'feedback': feedback,
-                'type': feedback_type,
-                'activity': activity_name
+                'success': False,
+                'message': 'No coaching needed at this time',
+                'rep_count': current_rep_count,
+                'movement_completed': False,
+                'should_provide_feedback': False
             }
             
         except Exception as e:
             logger.error(f"Error in live frame analysis: {e}")
             return {
                 'success': False,
-                'error': str(e)
-            } 
+                'error': str(e),
+                'rep_count': 0,
+                'movement_completed': False,
+                'should_provide_feedback': False
+            }
+
+    def analyze_complete_rep(self, activity_type: str, rep_data: Dict[str, Any], user_context: Dict[str, Any]) -> str:
+        """
+        Analyze a complete rep and provide expert coaching feedback - ONLY AI GENERATED
+        
+        Args:
+            activity_type: Type of exercise/activity
+            rep_data: Complete rep data including phases, landmarks, scores
+            user_context: User session context (total reps, performance trends)
+        
+        Returns:
+            Expert coaching feedback string (AI generated only)
+        """
+        try:
+            # Get expert coaching prompt
+            prompt = self.get_complete_rep_prompt(activity_type, rep_data, user_context)
+            
+            # Use AI analysis ONLY - no fallback to pre-written messages
+            response = self.gemini_service.analyze_movement_data(prompt, rep_data)
+            
+            if response and len(response.strip()) > 0:
+                return response
+            else:
+                # Return empty rather than fallback - let calling code handle
+                return ""
+                
+        except Exception as e:
+            logger.error(f"Error analyzing complete rep: {e}")
+            return ""  # Empty string instead of fallback message
+    
+    def get_complete_rep_prompt(self, activity_type: str, rep_data: Dict[str, Any], user_context: Dict[str, Any]) -> str:
+        """Generate expert prompt for complete rep analysis"""
+        
+        rep_number = rep_data.get('number', 1)
+        form_score = rep_data.get('formScore', 80)
+        phases = rep_data.get('phases', [])
+        
+        base_prompt = f"""
+        You are a world-class expert coach analyzing a complete {activity_type} rep. 
+        
+        REP DATA:
+        - Rep #{rep_number}
+        - Form Score: {form_score}%
+        - Phases: {len(phases)} movement phases detected
+        - Duration: {rep_data.get('endTime', 0) - rep_data.get('startTime', 0)}ms
+        
+        USER CONTEXT:
+        - Total reps this session: {user_context.get('totalReps', 0)}
+        - Overall performance: {user_context.get('recentPerformance', 0)}%
+        
+        INSTRUCTIONS:
+        Give specific, actionable feedback on this complete rep like a top-tier personal trainer would.
+        Focus on what they did right/wrong in this exact rep and immediate corrections for next rep.
+        
+        Keep response to 1-2 sentences MAX (for voice coaching).
+        Be encouraging but specific about improvements.
+        """
+        
+        # Activity-specific coaching focus
+        activity_prompts = {
+            'jumping jacks': """
+            JUMPING JACKS ANALYSIS:
+            - Coordination: Arms and legs moving together
+            - Range of motion: Full extension overhead and feet wide
+            - Landing control: Soft, controlled landings
+            - Rhythm: Consistent tempo throughout
+            
+            Example feedback: "Great coordination! Your arms reached full extension. Try landing a bit softer on your feet next rep."
+            """,
+            
+            'squat form check': """
+            SQUAT ANALYSIS:
+            - Depth: Hip crease below knee level
+            - Knee tracking: Knees in line with toes, no valgus
+            - Back position: Neutral spine, chest up
+            - Weight distribution: Balanced on whole foot
+            
+            Example feedback: "Excellent depth! Your knees tracked well. Keep your chest up more throughout the movement."
+            """,
+            
+            'push-up technique': """
+            PUSH-UP ANALYSIS:
+            - Body alignment: Straight line head to heels
+            - Range of motion: Chest close to ground
+            - Elbow position: 45-degree angle, not flared
+            - Control: Smooth up and down movement
+            
+            Example feedback: "Perfect body alignment! Your range of motion was excellent. Try keeping elbows slightly closer to your body."
+            """,
+            
+            'basketball shooting': """
+            BASKETBALL ANALYSIS:
+            - Shooting form: Elbow alignment, follow-through
+            - Base: Balanced stance, proper foot positioning
+            - Arc: Consistent release angle
+            - Timing: Smooth rhythm from catch to release
+            
+            Example feedback: "Good shooting base! Nice follow-through. Work on consistent elbow alignment for better accuracy."
+            """,
+            
+            'tennis practice': """
+            TENNIS ANALYSIS:
+            - Swing mechanics: Racket path, contact point
+            - Footwork: Positioning and balance
+            - Follow-through: Complete extension
+            - Timing: Contact point consistency
+            
+            Example feedback: "Solid swing mechanics! Good contact point. Try stepping into the shot more for extra power."
+            """,
+            
+            'golf swing': """
+            GOLF ANALYSIS:
+            - Stance: Balanced setup, proper alignment
+            - Swing plane: Consistent path throughout
+            - Tempo: Smooth rhythm, not rushed
+            - Contact: Clean strike, proper impact position
+            
+            Example feedback: "Nice swing tempo! Great balance throughout. Focus on keeping your head steady during the swing."
+            """
+        }
+        
+        activity_prompt = activity_prompts.get(activity_type, """
+        GENERAL MOVEMENT ANALYSIS:
+        - Form quality: Proper technique execution
+        - Control: Smooth, controlled movement
+        - Range of motion: Full movement completion
+        - Consistency: Maintaining quality throughout
+        
+        Example feedback: "Good movement control! Nice form throughout. Focus on maintaining this quality in your next rep."
+        """)
+        
+        return base_prompt + activity_prompt
+    
+    def get_activity_feedback_strategy(self, activity_type: str) -> str:
+        """Determine feedback strategy based on activity type"""
+        activity_lower = activity_type.lower()
+        
+        if 'plank' in activity_lower or 'wall sit' in activity_lower:
+            return 'continuous_hold'  # Form feedback during holds
+        elif 'golf' in activity_lower or 'tennis' in activity_lower:
+            return 'per_swing'       # Analyze each complete swing
+        elif any(term in activity_lower for term in ['pushup', 'push-up', 'push up', 'squat', 'jumping jack']):
+            return 'rep_groups'      # Group multiple reps for analysis
+        elif 'basketball' in activity_lower:
+            return 'per_attempt'     # Each shot attempt
+        else:
+            return 'general'         # Default strategy
+    
+    def get_live_coaching_prompt(self, activity_type: str, feedback_strategy: str, user_state: Dict[str, Any]) -> str:
+        """Generate activity-specific coaching prompts for real-time feedback"""
+        rep_count = user_state.get('reps_completed', 0)
+        
+        if feedback_strategy == 'continuous_hold':
+            # For plank, wall sit, etc.
+            return f"""
+            You are an expert fitness coach providing real-time form feedback for {activity_type}.
+            
+            The user is currently holding the {activity_type} position. Analyze their form and provide:
+            - Brief (10-15 words) encouragement or form correction
+            - Focus on core stability, alignment, and breathing
+            - Keep the user motivated during the hold
+            - Avoid repetitive feedback
+            
+            Current hold duration: {rep_count * 8} seconds
+            
+            Provide specific, actionable feedback based on what you see in the video frame.
+            """
+            
+        elif feedback_strategy == 'per_swing':
+            # For golf, tennis
+            return f"""
+            You are an expert {activity_type} coach providing real-time swing analysis.
+            
+            Analyze the user's current posture and swing technique. Provide:
+            - Brief (15-20 words) technical feedback
+            - Focus on stance, swing plane, balance, tempo
+            - If you can see a golf club, comment on grip and club position
+            - If you cannot clearly see a club, focus on body mechanics and setup
+            - Specific corrections for improvement
+            - Professional coaching tone
+            
+            Swing number: {rep_count + 1}
+            
+            Provide expert coaching feedback based on what you can observe in the video frame.
+            """
+            
+        elif feedback_strategy == 'rep_groups':
+            # For pushups, squats, etc.
+            return f"""
+            You are an expert strength coach providing real-time form feedback for {activity_type}.
+            
+            The user is performing {activity_type} exercises. Analyze their current form and provide:
+            - Brief (10-15 words) form correction or encouragement
+            - Focus on proper range of motion, alignment, and control
+            - Motivational but corrective feedback
+            - Specific technique tips
+            
+            Current rep: {rep_count + 1}
+            
+            Provide specific feedback based on their current movement quality.
+            """
+            
+        elif feedback_strategy == 'per_attempt':
+            # For basketball
+            return f"""
+            You are an expert basketball shooting coach providing real-time feedback.
+            
+            The user just attempted a shot. Analyze their shooting form and provide:
+            - Brief (15-20 words) technical feedback
+            - Focus on shooting mechanics, follow-through, balance
+            - Specific improvements for next shot
+            - Encouraging but instructive tone
+            
+            Shot attempt: {rep_count + 1}
+            
+            Analyze their shooting form and provide coaching feedback.
+            """
+            
+        else:
+            # General strategy
+            return f"""
+            You are an expert fitness coach providing real-time feedback for {activity_type}.
+            
+            Analyze the user's current form and movement. Provide:
+            - Brief (10-15 words) feedback
+            - Focus on proper technique and safety
+            - Encouraging and motivational tone
+            - Specific, actionable advice
+            
+            Movement count: {rep_count + 1}
+            
+            Provide helpful coaching feedback based on what you observe.
+            """

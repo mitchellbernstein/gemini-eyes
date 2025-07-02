@@ -15,12 +15,12 @@ class ElevenLabsService:
         self.api_key = getattr(settings, 'ELEVENLABS_API_KEY', None)
         self.base_url = "https://api.elevenlabs.io/v1"
         
-        # Voice IDs for different coaching styles
+        # Voice IDs for different coaching styles - Confident Male Voices
         self.voices = {
-            'coach': '21m00Tcm4TlvDq8ikWAM',  # Rachel - Professional, encouraging
-            'trainer': 'AZnzlk1XvdvUeBnXmlld',  # Domi - Energetic, motivating  
-            'instructor': '2EiwWnXFnvU5JabPnv8n',  # Bella - Clear, instructional
-            'default': '21m00Tcm4TlvDq8ikWAM'  # Rachel as default
+            'coach': 'pNInz6obpgDQGcFmaJgB',  # Adam - Deep, confident male
+            'trainer': 'TxGEqnHWrfWFTfGW9XjX',  # Josh - Enthusiastic male trainer
+            'instructor': 'ErXwobaYiN019PkySvjV',  # Antoni - Clear American male
+            'default': 'pNInz6obpgDQGcFmaJgB'  # Adam as default - confident male
         }
     
     def get_voice_for_activity(self, activity_name: str) -> str:
