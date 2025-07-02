@@ -116,38 +116,42 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="max-w-[640px] mx-auto">
-        {step === 'signin' && (
-          <GoogleSignIn />
-        )}
-        
-        {step === 'picker' && user && (
-          <ActivityPicker 
-            user={user}
-            onActivitySelected={handleActivitySelected}
-            onSignOut={handleSignOut}
-          />
-        )}
-        
-        {step === 'recording' && (
-          <VideoRecorder 
-            onVideoRecorded={handleVideoRecorded}
-            onBack={() => setStep('picker')}
-            activityName={selectedTemplate?.name || 'Custom Analysis'}
-          />
-        )}
-        
-        {step === 'results' && videoBlob && (
-          <ResultsDisplay 
-            videoBlob={videoBlob}
-            analysisResult={analysisResult}
-            isAnalyzing={isAnalyzing}
-            onStartAnalysis={handleStartAnalysis}
-            onTryAgain={handleTryAgain}
-            onBack={() => setStep('recording')}
-          />
-        )}
-      </div>
+      {/* Full width for video recording */}
+      {step === 'recording' && (
+        <VideoRecorder 
+          onVideoRecorded={handleVideoRecorded}
+          onBack={() => setStep('picker')}
+          activityName={selectedTemplate?.name || 'Custom Analysis'}
+        />
+      )}
+      
+      {/* Constrained width for other steps */}
+      {step !== 'recording' && (
+        <div className="max-w-[640px] mx-auto">
+          {step === 'signin' && (
+            <GoogleSignIn />
+          )}
+          
+          {step === 'picker' && user && (
+            <ActivityPicker 
+              user={user}
+              onActivitySelected={handleActivitySelected}
+              onSignOut={handleSignOut}
+            />
+          )}
+          
+          {step === 'results' && videoBlob && (
+            <ResultsDisplay 
+              videoBlob={videoBlob}
+              analysisResult={analysisResult}
+              isAnalyzing={isAnalyzing}
+              onStartAnalysis={handleStartAnalysis}
+              onTryAgain={handleTryAgain}
+              onBack={() => setStep('recording')}
+            />
+          )}
+        </div>
+      )}
     </main>
   )
 } 
