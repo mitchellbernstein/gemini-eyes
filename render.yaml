@@ -1,0 +1,48 @@
+services:
+  # Django Backend API
+  - type: web
+    name: motionmentor-api
+    env: python
+    buildCommand: cd backend && ./build.sh
+    startCommand: cd backend && gunicorn gemini_eyes.wsgi:application
+    plan: starter
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.4
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: False
+      - key: ALLOWED_HOSTS
+        value: motionmentor-api.onrender.com,api.motionmentor.co
+      - key: FRONTEND_URL
+        value: https://motionmentor.co
+      - key: DATABASE_URL
+        fromDatabase:
+          name: motionmentor-db
+          property: connectionString
+      - key: GOOGLE_CLIENT_ID
+        sync: false  # Set manually in Render dashboard
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false  # Set manually in Render dashboard
+      - key: GEMINI_API_KEY
+        sync: false  # Set manually in Render dashboard
+
+  # Next.js Frontend
+  - type: web
+    name: motionmentor-frontend
+    env: static
+    buildCommand: cd frontend && npm install && npm run build && npm run export
+    staticPublishPath: frontend/out
+    plan: starter
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://api.motionmentor.co
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false  # Set manually in Render dashboard
+
+databases:
+  - name: motionmentor-db
+    databaseName: motionmentor
+    user: motionmentor_user
+    plan: starter 
