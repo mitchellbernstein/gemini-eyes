@@ -283,7 +283,7 @@ export default function ActivityPicker({ user, onActivitySelected, onSignOut }: 
               value={customPrompt}
               onChange={(e) => setCustomPrompt(e.target.value)}
               placeholder="Describe what you want analyzed... (e.g., 'Check my golf swing', 'Analyze my dance moves', 'Review my presentation posture')"
-              className="w-full h-32 p-3 border border-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full h-32 p-3 border border-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
               maxLength={500}
             />
             <div className="flex items-center justify-between mt-3">
