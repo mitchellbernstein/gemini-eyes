@@ -5,7 +5,12 @@ OpenPanel Analytics Service for Motion Mentor Backend
 import os
 from typing import Dict, Any, Optional
 from django.conf import settings
-from openpanel import OpenPanel
+
+try:
+    from openpanel_py import OpenPanel
+except ImportError:
+    print("Warning: openpanel_py not available, analytics will be disabled")
+    OpenPanel = None
 
 
 class AnalyticsService:
@@ -18,6 +23,10 @@ class AnalyticsService:
     def _initialize_client(self):
         """Initialize OpenPanel client with environment variables"""
         try:
+            if OpenPanel is None:
+                print("OpenPanel not available - analytics disabled")
+                return
+                
             client_id = getattr(settings, 'OPENPANEL_CLIENT_ID', None)
             secret = getattr(settings, 'OPENPANEL_SECRET_KEY', None)
             
