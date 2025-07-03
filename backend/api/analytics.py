@@ -7,10 +7,15 @@ from typing import Dict, Any, Optional
 from django.conf import settings
 
 try:
-    from openpanel_py import OpenPanel
+    # Prefer the official SDK if it ever becomes available.
+    from openpanel_py import OpenPanel  # type: ignore
 except ImportError:
-    print("Warning: openpanel_py not available, analytics will be disabled")
-    OpenPanel = None
+    # Fallback to our minimal REST wrapper.
+    try:
+        from .openpanel_client import OpenPanel  # local lightweight client
+    except Exception:
+        print("Warning: OpenPanel client not available, analytics will be disabled")
+        OpenPanel = None
 
 
 class AnalyticsService:
