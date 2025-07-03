@@ -2486,6 +2486,26 @@ export default function VideoRecorder({ onVideoRecorded, onBack, activityName }:
   }
 
   const handleBack = () => {
+    // Stop camera and cleanup before navigating back
+    stopCamera()
+    
+    // Stop any ongoing recording
+    if (isRecording) {
+      stopRecording()
+    }
+    
+    // Clear any timers
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    
+    // Clear live coaching interval
+    if (liveCoachingIntervalRef.current) {
+      clearInterval(liveCoachingIntervalRef.current)
+      liveCoachingIntervalRef.current = null
+    }
+    
     // Track back navigation
     if (op) {
       op.track('video_recorder_back', {
